@@ -3,7 +3,9 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
+from app.models.analysis import AnalysisDocument
 from app.models.run import RunCreate, RunDocument
+from app.services.analysis_builder import build_run_analysis
 from app.services.run_orchestrator import RunOrchestrator, sse_encode
 from app.storage.errors import InvalidProjectIdError, ProjectNotFoundError
 from app.storage.project_store import ProjectStore
@@ -53,3 +55,26 @@ async def stream_run(request: Request, run_id: str) -> StreamingResponse:
         },
     )
 
+
+@router.get("/runs/{run_id}/analysis", response_model=AnalysisDocument)
+async def get_run_analysis(request: Request, run_id: str) -> AnalysisDocument:
+    try:
+        run = get_store(request).get_run(run_id)
+        try:
+            return AnalysisDocument.model_validate(
+                get_store(request).read_run_analysis(run.project_id, run.id)
+            )
+        except ProjectNotFoundError:
+            analysis = build_run_analysis(
+                run,
+                get_store(request).get_run_dir(run.project_id, run.id),
+                get_store(request).list_run_dirs(run.project_id),
+            )
+            get_store(request).write_run_analysis(
+                run.project_id, run.id, analysis.model_dump(mode="json")
+            )
+            return analysis
+    except ProjectNotFoundError:
+        raise HTTPException(status_code=404, detail="Run not found") from None
+    except InvalidProjectIdError:
+        raise HTTPException(status_code=400, detail="Invalid run id") from None

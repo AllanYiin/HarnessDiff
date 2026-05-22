@@ -37,7 +37,9 @@ Provider events are converted to app-level SSE payloads:
 - `delta`
 - `completed`
 - `error`
+- `analysis_ready`
 - `run_completed`
+- `run_failed`
 
 The backend route layer does not parse OpenAI events directly. It calls `RunOrchestrator`, which consumes an `LLMProvider` and writes per-pane JSON artifacts under the run folder.
 
@@ -73,6 +75,31 @@ runs/{run_id}/
 ```
 
 `events.jsonl` preserves provider events for debugging. `usage.json` keeps normalized usage and raw provider usage when available.
+
+## Stage 5 Analysis Boundary
+
+Analysis is intentionally outside the provider adapter. After a run completes, `RunOrchestrator` calls the deterministic analysis builder, which reads:
+
+- `run.json`
+- `{pane}/input.json`
+- `{pane}/output.json`
+- `{pane}/usage.json`
+- prior run artifacts in the same project
+
+The analyzer writes `analysis/analysis.json` and emits an `analysis_ready` SSE payload before `run_completed`. It does not call an LLM. Provider-reported usage remains the source of truth for billed token numbers; context section token counts are only rough structural estimates.
+
+If any pane raises a provider error, `RunOrchestrator` writes the pane error event, marks the run `failed`, emits `run_failed`, and does not write analysis for that run. This prevents failed partial output from being reported as a complete comparison.
+
+## Stage 6 Regression Boundary
+
+Stage 6 adds automated regression coverage for:
+
+- provider failure in one pane while the other pane emits output;
+- invalid and missing run ids;
+- lazy analysis rebuild when `analysis.json` is absent;
+- single-pane analysis without misleading cross-pane deltas;
+- frontend Harness settings disclosure without horizontal overflow;
+- frontend `analysis_ready` SSE rendering in desktop and mobile Playwright projects.
 
 ## Non-goals in Stage 0
 

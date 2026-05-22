@@ -4,7 +4,14 @@ import { AnalysisSummary } from "./components/AnalysisSummary";
 import { ChatPane } from "./components/ChatPane";
 import { Composer } from "./components/Composer";
 import { TopBar } from "./components/TopBar";
-import { createProject, createRun, streamRun, type RunStreamEvent } from "./api";
+import {
+  createProject,
+  createRun,
+  getRunAnalysis,
+  streamRun,
+  type AnalysisDocument,
+  type RunStreamEvent
+} from "./api";
 import { nextInputModeAfterCompletedTurn } from "./domain/inputMode";
 import type {
   AttachmentPreview,
@@ -59,6 +66,7 @@ export function App() {
   const [inputMode, setInputMode] = useState<InputMode>("integrated");
   const [projectId, setProjectId] = useState<string | null>(null);
   const [harnessModules, setHarnessModules] = useState<HarnessModules>(defaultHarnessModules);
+  const [analysis, setAnalysis] = useState<AnalysisDocument | null>(null);
   const [integratedDraft, setIntegratedDraft] = useState("");
   const [attachments, setAttachments] = useState<AttachmentPreview[]>([]);
   const [paneState, setPaneState] = useState<Record<PaneId, PaneState>>({
@@ -166,6 +174,7 @@ export function App() {
 
   async function submitWithApi(prompt: string, targetPanes: PaneId[], mode: InputMode) {
     const activeProjectId = await ensureProject();
+    setAnalysis(null);
     const assistantIds = {
       NoHarness: `assistant_${crypto.randomUUID()}`,
       Harness: `assistant_${crypto.randomUUID()}`
@@ -180,7 +189,13 @@ export function App() {
       harnessModules
     });
     targetPanes.forEach((pane) => prepareStreamingPane(pane, prompt, assistantIds[pane]));
-    await streamRun(run.id, (event) => applyStreamEvent(event, assistantIds));
+    await streamRun(run.id, (event) => {
+      if (event.type === "analysis_ready" && event.analysis) {
+        setAnalysis(event.analysis);
+      }
+      applyStreamEvent(event, assistantIds);
+    });
+    getRunAnalysis(run.id).then(setAnalysis).catch(() => undefined);
     setTurnCount((current) => {
       const next = current + 1;
       setInputMode((currentMode) => nextInputModeAfterCompletedTurn(current, currentMode));
@@ -206,6 +221,7 @@ export function App() {
     }
     setIntegratedDraft("");
     submitWithApi(prompt, panes, "integrated").catch(() => {
+      setAnalysis(null);
       panes.forEach((pane) => streamMockResponse(pane, prompt));
       completeTurnAfterMock();
     });
@@ -218,6 +234,7 @@ export function App() {
     }
     updatePane(pane, (current) => ({ ...current, draft: "" }));
     submitWithApi(prompt, [pane], "independent").catch(() => {
+      setAnalysis(null);
       streamMockResponse(pane, prompt);
       completeTurnAfterMock();
     });
@@ -273,7 +290,12 @@ export function App() {
           streaming={paneState.Harness.streaming}
         />
       </section>
-      <AnalysisSummary turnCount={turnCount} inputMode={inputMode} running={running} />
+      <AnalysisSummary
+        turnCount={turnCount}
+        inputMode={inputMode}
+        running={running}
+        analysis={analysis}
+      />
       <Composer
         inputMode={inputMode}
         integratedDraft={integratedDraft}

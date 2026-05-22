@@ -8,6 +8,10 @@ Use this checklist before creating a GitHub tag or release.
 - Confirm `.env.example` contains all required environment variables without secrets.
 - Confirm `CHANGELOG.md` has a release entry.
 - Confirm README startup instructions are current.
+- Confirm `DEVNOTE.md` snapshot matches the implemented stage.
+- Confirm local `data/projects/*` artifacts are not staged.
+- Confirm `specs/product-spec.md` and `specs/stage-plan.md` match the release scope.
+- Confirm Playwright screenshots are generated but not required as release assets.
 
 ## Verification
 
@@ -27,6 +31,19 @@ node node_modules\vitest\vitest.mjs run src
 node node_modules\@playwright\test\cli.js install chromium
 node node_modules\@playwright\test\cli.js test
 ```
+
+Expected regression coverage includes provider failures, invalid run ids, lazy analysis rebuilds, Harness settings disclosure, no horizontal overflow, composer visibility, pane visibility, and streamed `analysis_ready` rendering.
+
+## Release Notes Draft
+
+For the first Chat MVP release, include:
+
+- dual-pane Harness vs NoHarness Chat workbench
+- OpenAI Responses API streaming
+- per-run Harness module toggles
+- local JSON artifacts for project/run/input/output/events/usage/analysis
+- deterministic current and cumulative token/context analysis
+- known limitations: Chat surface only, no real provider file/image upload, no voice input, stored history not yet replayed into provider context
 
 ## Tagging
 

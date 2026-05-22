@@ -9,6 +9,7 @@ from typing import Any
 from app.models.project import utc_now_iso
 from app.models.run import RunDocument, RunStatus
 from app.providers.base import LLMProvider, LLMRequest, ProviderEvent
+from app.services.analysis_builder import build_run_analysis
 from app.services.context_builder import build_instructions
 from app.storage.json_io import write_json_atomic
 from app.storage.project_store import ProjectStore
@@ -22,6 +23,7 @@ class RunOrchestrator:
     async def stream_run(self, run: RunDocument) -> AsyncIterator[dict[str, Any]]:
         self.store.update_run_status(run.project_id, run.id, RunStatus.running)
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        pane_errors: list[dict[str, Any]] = []
 
         async def run_pane(pane: str) -> None:
             try:
@@ -57,6 +59,7 @@ class RunOrchestrator:
                     "retryable": True,
                     "sequence": 0,
                 }
+                pane_errors.append(error_payload)
                 self.store.append_error_event(run.project_id, run.id, pane, error_payload)
                 await queue.put(error_payload)
             finally:
@@ -72,7 +75,24 @@ class RunOrchestrator:
                     continue
                 yield payload
             await asyncio.gather(*tasks)
+            if pane_errors:
+                self.store.update_run_status(run.project_id, run.id, RunStatus.failed)
+                yield {"run_id": run.id, "type": "run_failed", "errors": pane_errors}
+                return
             self.store.update_run_status(run.project_id, run.id, RunStatus.completed)
+            analysis = build_run_analysis(
+                run,
+                self.store.get_run_dir(run.project_id, run.id),
+                self.store.list_run_dirs(run.project_id),
+            )
+            self.store.write_run_analysis(
+                run.project_id, run.id, analysis.model_dump(mode="json")
+            )
+            yield {
+                "run_id": run.id,
+                "type": "analysis_ready",
+                "analysis": analysis.model_dump(mode="json"),
+            }
             yield {"run_id": run.id, "type": "run_completed"}
         except asyncio.CancelledError:
             for task in tasks:

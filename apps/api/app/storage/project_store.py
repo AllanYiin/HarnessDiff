@@ -104,6 +104,32 @@ class ProjectStore:
         data = read_json(run_path)
         return RunDocument.model_validate(data)
 
+    def get_run_dir(self, project_id: str, run_id: str) -> Path:
+        return self._run_dir(project_id, run_id)
+
+    def list_run_dirs(self, project_id: str) -> list[Path]:
+        runs_dir = self._project_dir(project_id) / "runs"
+        if not runs_dir.exists():
+            return []
+        return sorted(
+            [child for child in runs_dir.iterdir() if child.is_dir()],
+            key=lambda child: int(read_json(child / "run.json").get("turn_index", 0))
+            if (child / "run.json").exists()
+            else 0,
+        )
+
+    def write_run_analysis(self, project_id: str, run_id: str, analysis: dict[str, Any]) -> None:
+        analysis_dir = self._run_dir(project_id, run_id) / "analysis"
+        analysis_dir.mkdir(parents=True, exist_ok=True)
+        write_json_atomic(analysis_dir / "analysis.json", analysis)
+
+    def read_run_analysis(self, project_id: str, run_id: str) -> dict[str, Any]:
+        analysis_path = self._run_dir(project_id, run_id) / "analysis" / "analysis.json"
+        if not analysis_path.exists():
+            raise ProjectNotFoundError(run_id)
+        data = read_json(analysis_path)
+        return data if isinstance(data, dict) else {}
+
     def update_run_status(self, project_id: str, run_id: str, status: RunStatus) -> RunDocument:
         run_dir = self._run_dir(project_id, run_id)
         run = RunDocument.model_validate(read_json(run_dir / "run.json"))

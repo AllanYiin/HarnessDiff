@@ -39,6 +39,7 @@ runs/
     Harness/
     NoHarness/
     analysis/
+      analysis.json
 ```
 
 ## Run Document
@@ -96,6 +97,54 @@ Each project stores its default Harness module profile at `config/harness.defaul
 ```
 
 Run-level `harness_modules` are the effective booleans after applying API/UI overrides to the project config. They are stored in `run.json` and repeated in `Harness/input.json` with the final instructions for traceability.
+
+## Analysis Document
+
+Completed runs write `analysis/analysis.json`:
+
+```json
+{
+  "schema_version": "2026-05-22.1",
+  "project_id": "proj_...",
+  "run_id": "run_...",
+  "turn_index": 1,
+  "generated_at": "2026-05-22T00:00:00+00:00",
+  "panes": {
+    "NoHarness": {
+      "pane": "NoHarness",
+      "current_turn_usage": {
+        "input_tokens": 30,
+        "output_tokens": 12,
+        "reasoning_tokens": 0,
+        "total_tokens": 42,
+        "source": "provider_reported"
+      },
+      "cumulative_usage": {
+        "input_tokens": 70,
+        "output_tokens": 30,
+        "reasoning_tokens": 0,
+        "total_tokens": 100,
+        "source": "provider_reported"
+      },
+      "context_sections": [],
+      "output_characters": 80,
+      "enabled_harness_modules": [],
+      "provider_context_keys": ["instructions", "prompt"]
+    }
+  },
+  "comparison": {
+    "total_token_delta": 8,
+    "input_token_delta": 3,
+    "output_token_delta": 5,
+    "reasoning_token_delta": 0,
+    "harness_extra_sections": ["behavior_preferences"]
+  },
+  "notes": [],
+  "raw_sources": {}
+}
+```
+
+Usage numbers come from provider `usage.json` when available. Context section `estimated_tokens` are deterministic estimates from saved character counts, not provider billing numbers.
 
 ## Versioning
 

@@ -11,10 +11,62 @@ type Run = {
 export type RunStreamEvent = {
   run_id: string;
   pane?: PaneId;
-  type: "created" | "delta" | "completed" | "error" | "run_completed";
+  type:
+    | "created"
+    | "delta"
+    | "completed"
+    | "error"
+    | "analysis_ready"
+    | "run_completed"
+    | "run_failed";
   text?: string | null;
   message?: string;
   usage?: unknown;
+  analysis?: AnalysisDocument;
+};
+
+export type TokenUsage = {
+  input_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  total_tokens: number;
+  source: string;
+};
+
+export type ContextSection = {
+  key: string;
+  label: string;
+  status: string;
+  characters: number;
+  estimated_tokens: number;
+  notes: string;
+};
+
+export type PaneAnalysis = {
+  pane: PaneId;
+  current_turn_usage: TokenUsage;
+  cumulative_usage: TokenUsage;
+  context_sections: ContextSection[];
+  output_characters: number;
+  enabled_harness_modules: string[];
+  provider_context_keys: string[];
+};
+
+export type AnalysisDocument = {
+  schema_version: string;
+  project_id: string;
+  run_id: string;
+  turn_index: number;
+  generated_at: string;
+  panes: Partial<Record<PaneId, PaneAnalysis>>;
+  comparison: {
+    total_token_delta: number;
+    input_token_delta: number;
+    output_token_delta: number;
+    reasoning_token_delta: number;
+    harness_extra_sections: string[];
+  };
+  notes: string[];
 };
 
 export async function createProject(name: string): Promise<Project> {
@@ -52,6 +104,14 @@ export async function createRun(params: {
   });
   if (!response.ok) {
     throw new Error(`Failed to create run: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function getRunAnalysis(runId: string): Promise<AnalysisDocument> {
+  const response = await fetch(`/api/runs/${runId}/analysis`);
+  if (!response.ok) {
+    throw new Error(`Failed to load analysis: ${response.status}`);
   }
   return response.json();
 }

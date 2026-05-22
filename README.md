@@ -1,49 +1,84 @@
 # HarnessDiff
 
+## Overview
+
 HarnessDiff is a localhost teaching workbench for comparing the same chat task with and without a Harness layer.
 
-Current local milestone:
+It currently implements the Chat surface only. Workflow, Agent, and MultiAgents are reserved surface types for future stages.
 
-- `apps/web`: React + Vite + TypeScript frontend scaffold.
-- `apps/api`: FastAPI backend scaffold.
-- `data/projects`: local JSON project storage root.
-- `docs`: architecture, storage, and provider extension notes.
-- `tests`: backend smoke tests.
-- Stage 4 has a first Harness Engine slice: project JSON config, per-run Harness module overrides, Harness-only instruction assembly, and UI toggles.
+## What Works Now
+
+- Dual-pane chat comparison: `NoHarness` on the left, `Harness` on the right.
+- First turn can use integrated input; later turns can use independent pane input.
+- OpenAI Responses API streaming through a local FastAPI backend.
+- Project, run, input, output, event, usage, and analysis artifacts stored as local JSON.
+- Per-run Harness module toggles for the Harness pane only.
+- Deterministic current-turn and cumulative token/context analysis.
+- Desktop and mobile Playwright smoke/regression coverage.
 
 ## Prerequisites
 
 - Python 3.10+
-- Node.js 22+ for the frontend
-- A working package manager for frontend dependencies. This environment currently has Node available, but `npm` may need repair before frontend scripts can run.
+- Node.js 22+
+- Corepack / pnpm for frontend dependencies
+- `OPENAI_API_KEY` for live OpenAI streaming
 
-## Backend
+## Quick Start
+
+From the repository root:
+
+```powershell
+python -m pip install -r requirements.txt
+cd apps/web
+corepack pnpm install
+```
+
+Set the API key in your shell:
+
+```powershell
+$env:OPENAI_API_KEY="sk-..."
+```
+
+Start the backend from the repository root:
 
 ```powershell
 python -m uvicorn app.main:app --app-dir apps/api --reload
 ```
 
-Health check:
-
-```powershell
-python -m pytest
-```
-
-## Frontend
-
-After installing dependencies:
+Start the frontend in another shell:
 
 ```powershell
 cd apps/web
-corepack pnpm install
 corepack pnpm run dev
 ```
 
-The frontend starts as a dual-pane Chat workbench. It sends to the API first and falls back to mock streaming when the backend is unavailable.
+Open the Vite URL shown in the terminal, normally `http://localhost:5173`.
+
+## Verify
+
+```powershell
+python -m pytest
+python -m compileall apps\api
+node apps\web\node_modules\typescript\bin\tsc -b apps\web
+node apps\web\node_modules\vitest\vitest.mjs run src --root apps\web
+node apps\web\node_modules\vite\bin\vite.js build apps\web
+node apps\web\node_modules\@playwright\test\cli.js test --config apps\web\playwright.config.ts
+```
+
+The Playwright command writes screenshots to `test-results/screenshots`.
 
 ## Environment
 
-Copy `.env.example` to `.env` or set `OPENAI_API_KEY` in the local environment before live OpenAI streaming.
+Copy `.env.example` to `.env` or set environment variables in the shell.
+
+Important variables:
+
+- `HARNESSDIFF_DATA_DIR`: local JSON storage root, default `./data`
+- `OPENAI_API_KEY`: required for live OpenAI streaming
+- `OPENAI_DEFAULT_MODEL`: documented default model
+- `OPENAI_DEFAULT_REASONING_EFFORT`: documented default reasoning effort
+
+The current frontend default is `gpt-5.4-mini` with `medium` reasoning effort.
 
 ## OpenAI Streaming
 
@@ -53,6 +88,19 @@ The backend exposes run streaming through:
 - `GET /api/runs/{run_id}/stream`
 
 The first provider is OpenAI Responses API streaming. The frontend attempts the local API first and falls back to mock streaming when the backend is not running, so UI smoke tests can run without an API key.
+
+See [docs/api-reference.md](docs/api-reference.md) for endpoint details.
+
+## Analysis
+
+The backend produces analysis after each streamed run:
+
+- `GET /api/runs/{run_id}/analysis`
+- local artifact: `data/projects/{project_id}/runs/{run_id}/analysis/analysis.json`
+
+The analysis is deterministic and reads saved JSON artifacts. Provider-reported usage is used for input, output, reasoning, and total tokens when `usage.json` exists. Context section token counts are marked as estimates derived from saved text length.
+
+Analysis is not an LLM call. It does not add token cost.
 
 ## Harness Modules
 
@@ -72,17 +120,26 @@ The current module switches are:
 
 These switches affect only the `Harness` pane. `NoHarness` keeps the direct baseline instruction.
 
-## Stage Boundary
+## Repository Map
 
-The initial local milestones are complete through Stage 4 when:
+- `apps/api`: FastAPI backend, storage, run orchestration, provider adapter, analysis builder
+- `apps/web`: React workbench, composer, pane UI, Playwright tests
+- `data`: ignored local JSON runtime data
+- `docs`: architecture, API, storage, provider, release, troubleshooting docs
+- `specs`: product spec and stage acceptance notes
+- `tests`: backend pytest coverage
+- `DEVNOTE.md`: cumulative development handoff notes
 
-- backend health route works;
-- pytest smoke tests pass;
-- project folders and documentation exist;
-- storage root can be initialized;
-- dual-pane UI passes desktop/mobile Playwright smoke;
-- OpenAI Responses API streaming works through the provider adapter and run SSE route;
-- Harness module config can be toggled per run and stored in local JSON.
+## Documentation
+
+- [Architecture](docs/architecture.md)
+- [API Reference](docs/api-reference.md)
+- [Storage Format](docs/storage-format.md)
+- [Provider Adapter](docs/provider-adapter.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Release Checklist](docs/release-checklist.md)
+- [Product Spec](specs/product-spec.md)
+- [Stage Plan](specs/stage-plan.md)
 
 ## Release Notes
 

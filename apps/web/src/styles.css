@@ -322,6 +322,35 @@ textarea:disabled {
   color: #1e3a8a;
 }
 
+.analysisLead {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.analysisMetrics {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.analysisMetrics span {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #bfdbfe;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #1e3a8a;
+  padding: 0 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .composerHeader {
   width: 100%;
   justify-content: space-between;
@@ -480,6 +509,10 @@ select:focus {
     align-items: flex-start;
     flex-direction: column;
     margin-inline: var(--space-3);
+  }
+
+  .analysisMetrics {
+    justify-content: flex-start;
   }
 
   .composer {

@@ -9,7 +9,7 @@
 ## 📌 SNAPSHOT — 當前狀態
 <!-- 這一整段每次 /devnote 會被覆寫，只反映「到目前為止的最新狀態」 -->
 
-**最後更新**：2026-05-23 00:01
+**最後更新**：2026-05-23 02:25
 
 ### 需求狀態
 - [x] Stage 0：localhost web app / FastAPI skeleton、README、env 樣板、storage/provider docs。
@@ -17,12 +17,11 @@
 - [x] Stage 2：雙 Pane Chat UI、整合/個別輸入模式、附件預覽、mock streaming、Playwright desktop/mobile 視覺 smoke。
 - [x] Stage 3：OpenAI Responses API streaming provider、run orchestration、SSE routes、前端串接已通過 fake provider、default model live provider、雙 pane route/SSE live 驗證。
 - [x] Stage 4：Harness Engine 與組態開關第一版完成；project config、run-level overrides、Harness-only instructions、UI toggles、input artifact traceability 均已接上。
-- [ ] Stage 5：本回合與累計分析器。
-- [ ] Stage 6：整合/回歸/邊界測試。
-- [ ] Stage 7：文件化與交付。
+- [x] Stage 5：本回合與累計分析器第一版完成；analysis artifact、SSE `analysis_ready`、API retrieval、前端 summary metrics、current/cumulative usage 與 context sections 均已接上。
+- [x] Stage 6：整合/回歸/邊界測試完成；provider failure、invalid ids、lazy analysis rebuild、single-pane analysis、settings disclosure、analysis_ready e2e 均已納入。
+- [x] Stage 7：文件化與交付完成；README quick start、API reference、troubleshooting、specs/product-spec、specs/stage-plan、release checklist 與 docs audit 均已收尾。
 
 ### 未解問題
-- `specs/` 目錄尚未建立；前一次使用者要求切規格時被後續截圖驗證任務中斷。
 - 本機 `npm` shim 壞掉，已改用 Corepack pnpm 的實際路徑或 `corepack pnpm`。
 
 ### 關鍵技術決策（當前有效）
@@ -33,6 +32,9 @@
 - **Streaming first**：所有 LLM 輸出必須 streaming；Responses API 需處理 semantic events，如 `response.output_text.delta`、`response.completed`、`error`。
 - **API-first fallback**：前端送出會先呼叫 FastAPI run endpoint；若後端未啟動或 API 失敗，才 fallback 到既有 mock streaming，讓 Stage 2 e2e 不需後端也能通過。
 - **Harness Engine boundary**：Harness 技巧只在 `context_builder` 轉成 Harness pane instructions；provider 只看最終 `LLMRequest`，不理解 Harness 模組細節。
+- **Deterministic analysis**：Stage 5 分析器只讀本機 JSON artifacts，不呼叫 LLM；provider usage 是 token 真實來源，context section token 只是字元數估算。
+- **Failed run semantics**：任一 pane provider error 時 run 會標記 `failed`、送出 `run_failed`，不產生 analysis，避免 partial output 被誤認為完整比較。
+- **Documentation handoff**：Stage 7 文件分工為 README 入口、`docs/` 操作/參考、`specs/` 規格/階段驗收、`DEVNOTE.md` session handoff。
 - **Stage 2 visual gate**：獨立 Playwright Chromium 已取代 Codex in-app browser 截圖，desktop/mobile e2e 會輸出 screenshots。
 
 ### 已知地雷（仍需注意）
@@ -44,6 +46,7 @@
 - **E2E proxy ECONNREFUSED**：只有 Vite 前端啟動、FastAPI 未啟動時，Playwright 會看到 `/api/projects` proxy error；目前是預期 fallback 行為，不代表 UI smoke 失敗。
 - **OpenAI stream helper 參數**：`client.responses.stream(...)` 不接受 `stream=True`；只有 `responses.create(..., stream=True)` 需要該參數。
 - **SDK raw event 序列化**：OpenAI SDK event 的 `model_dump()` 可能在本機環境丟 TypeError；raw artifact logging 必須容錯降級。
+- **Frontend-design audit scripts missing**：此 repo 目前沒有 `audit:frontend-runtime` 或 `audit_frontend_principles.py`；UI gate 暫以獨立 Playwright desktop/mobile 替代。
 - **PowerShell 文字讀寫**：讀寫文字檔需顯式 `-Encoding UTF8`，不可裸用 `Get-Content` / `Set-Content`。
 
 ---
@@ -98,6 +101,59 @@
 
 ### 備註
 - 驗證結果：`python -m pytest`、`python -m compileall apps\api`、TypeScript build、Vitest、Vite build、Playwright desktop/mobile 均已通過。
+
+---
+
+## [2026-05-23 02:19] Stage 6 regression and boundary tests
+
+### 本次做了什麼（增量）
+完成 Stage 6 測試防線。後端新增 provider 單 pane 失敗、invalid/missing run id、analysis lazy rebuild、single-pane analysis 邊界測試；前端 Playwright 新增 Harness settings disclosure/toggle overflow 回歸，以及 mock SSE `analysis_ready` metrics 渲染測試。文件同步補上 `run_failed` 行為與 Stage 6 regression boundary。
+
+### 本次重大技術決策
+- **provider failure 不再標記 completed**
+  - 內容：若任一 pane provider error，`RunOrchestrator` 寫入 error event、標記 run `failed`、送出 `run_failed`，並跳過 analysis 產生。
+  - 理由：部分 pane 成功不等於比較完成；若仍標記 completed，Stage 5 分析會誤導教學判讀。
+  - 影響：前端型別新增 `run_failed` event；未來 UI 可針對 failed run 做更明確的錯誤恢復。
+- **Stage 6 優先測邊界，不新增功能**
+  - 內容：本階段只補回歸和邊界測試，以及必要的失敗狀態語意修正。
+  - 理由：Stage 7 前需要先穩定已完成功能，不應在測試階段擴大產品範圍。
+  - 影響：下一階段可聚焦文件化與交付，而不是繼續補底層風險。
+
+### 本次失敗經驗與填坑
+- **partial provider success 的狀態語意不完整**
+  - 試過無效：原本所有 pane task 結束後直接標記 completed，即使其中一側 error。
+  - 最終解法：收集 pane errors；有錯就 `failed` + `run_failed` + 不寫 analysis。
+  - 根因：async task lifecycle 的「都結束」不等於業務語意的「比較完成」。
+
+### 備註
+- 驗證結果：`python -m pytest` 13 passed、`python -m compileall apps\api`、TypeScript build、Vitest、Vite build、Playwright desktop/mobile 4 tests 均已通過。
+
+---
+
+## [2026-05-23 02:25] Stage 7 documentation handoff
+
+### 本次做了什麼（增量）
+完成 Stage 7 文件化與交付收尾。README 改成可執行 quick start 與 docs map；新增 `docs/api-reference.md`、`docs/troubleshooting.md`、`specs/product-spec.md`、`specs/stage-plan.md`；更新 architecture、release checklist、CHANGELOG 與 DEVNOTE。先前 `specs/` 未建立的缺口已排除。
+
+### 本次重大技術決策
+- **文件分層，不把所有內容塞進 README**
+  - 內容：README 只做 overview、quick start、verification、docs map；API/storage/provider/troubleshooting/spec 分別放到對應文件。
+  - 理由：README 要讓新讀者快速成功一次，reference 細節留在可查詢文件中。
+  - 影響：後續更新 endpoint 或 storage schema 時，優先改 `docs/api-reference.md` / `docs/storage-format.md`，README 只保留入口。
+- **specs 作為產品與階段驗收真相來源**
+  - 內容：`specs/product-spec.md` 記錄 Chat MVP 產品範圍；`specs/stage-plan.md` 記錄 Stage 0-7 驗收狀態。
+  - 理由：符合先前使用者要求把規格章節切到 `github_repo/specs`，也讓 release handoff 更清楚。
+  - 影響：未來 Workflow/Agent/MultiAgents 應先更新 specs，再進實作。
+
+### 本次失敗經驗與填坑
+- **README audit 初次分數不足**
+  - 試過無效：以 README 內容直接跑 technical doc audit，缺少明確 `overview` signal。
+  - 最終解法：補 `Overview` heading；README audit 達 100/100。
+  - 根因：文件內容可讀不代表符合 automated doc quality gate 的結構訊號。
+
+### 備註
+- 文件 audit：README `readme` 100/100、API reference `reference` 100/100、troubleshooting `runbook` 100/100。
+- 驗證結果：`python -m pytest` 13 passed、`python -m compileall apps\api`、TypeScript build、Vitest、Vite build、Playwright desktop/mobile 4 tests 均已通過。
 - 尚未驗證：真實 OpenAI Responses API streaming，因本機未提供 `OPENAI_API_KEY`。
 
 ---
@@ -130,3 +186,29 @@
 ### 備註
 - live 驗證結果：`gpt-4.1-mini` provider smoke 通過；`gpt-5.4-mini` + `reasoning_effort=medium` default smoke 通過；FastAPI run route + SSE 雙 pane live smoke 通過。
 - 回歸驗證結果：`python -m pytest tests\api`、`python -m compileall apps\api`、TypeScript build、Vitest、Vite build、Playwright desktop/mobile 均已通過。
+
+---
+
+## [2026-05-23 02:13] Stage 5 deterministic analysis
+
+### 本次做了什麼（增量）
+完成 Stage 5 第一版分析器：run streaming 完成後會建立 `analysis/analysis.json`，SSE 會先送 `analysis_ready` 再送 `run_completed`，並新增 `GET /api/runs/{run_id}/analysis`。分析內容包含各 pane 的本回合 usage、累計 usage、context section 結構、Harness 額外模組、左右 token delta；前端分析列會顯示目前回合與累計 token 摘要。
+
+### 本次重大技術決策
+- **分析器 deterministic，不呼叫 LLM**
+  - 內容：`analysis_builder` 只讀 `run.json`、`input.json`、`output.json`、`usage.json` 與同 project 既有 run artifacts。
+  - 理由：分析器若再呼叫 LLM 會新增成本與不確定性，且會污染「token 花在哪」的教學目的。
+  - 影響：Stage 5 可穩定測試；未來若需要語意分析，可另加 optional analyzer provider。
+- **usage 與 context section token 分離**
+  - 內容：provider-reported usage 是真實 token 數；context section 只用字元數估算，並在 notes 標示。
+  - 理由：OpenAI usage 只提供整體 input/output/reasoning，不提供每個自定 section 的精確 token 分攤。
+  - 影響：UI 與 docs 不能把 `estimated_tokens` 當作 billing token。
+
+### 本次失敗經驗與填坑
+- **frontend-design 指定 audit scripts 不存在**
+  - 試過無效：在 repo 搜尋 `audit:frontend-runtime` 與 `audit_frontend_principles.py`，目前沒有可執行目標。
+  - 最終解法：保留現有獨立 Playwright desktop/mobile gate，並在 DEVNOTE 記錄此限制。
+  - 根因：專案目前還沒有引入 frontend-design skill 內建 audit toolchain。
+
+### 備註
+- 驗證結果：`python -m pytest`、`python -m compileall apps\api`、TypeScript build、Vitest、Vite build、Playwright desktop/mobile 均已通過。
