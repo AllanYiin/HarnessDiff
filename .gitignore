@@ -9,6 +9,8 @@ htmlcov/
 node_modules/
 dist/
 coverage/
+test-results/
+playwright-report/
 *.tsbuildinfo
 .pnpm-store/
 .env
@@ -16,4 +18,3 @@ coverage/
 .DS_Store
 data/projects/*
 !data/projects/.gitkeep
-

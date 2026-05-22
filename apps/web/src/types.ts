@@ -2,6 +2,19 @@ export type PaneId = "NoHarness" | "Harness";
 
 export type InputMode = "integrated" | "independent";
 
+export type HarnessModuleId =
+  | "context_manifest"
+  | "source_map"
+  | "guardrails"
+  | "output_contract"
+  | "planning_preamble"
+  | "tool_policy"
+  | "memory_selection"
+  | "post_answer_critique"
+  | "token_budgeter";
+
+export type HarnessModules = Record<HarnessModuleId, boolean>;
+
 export type Message = {
   id: string;
   role: "user" | "assistant";
@@ -22,4 +35,3 @@ export type PaneState = {
   draft: string;
   streaming: boolean;
 };
-

@@ -23,7 +23,9 @@ From `apps/web`:
 corepack pnpm install
 node node_modules\typescript\bin\tsc -b
 node node_modules\vite\bin\vite.js build
-node node_modules\vitest\vitest.mjs run
+node node_modules\vitest\vitest.mjs run src
+node node_modules\@playwright\test\cli.js install chromium
+node node_modules\@playwright\test\cli.js test
 ```
 
 ## Tagging
@@ -31,4 +33,3 @@ node node_modules\vitest\vitest.mjs run
 - Use semantic version tags once the project reaches public release readiness, for example `v0.1.0`.
 - Attach release notes that include user-visible changes, known limitations, and upgrade notes.
 - Do not attach local data or dependency folders to GitHub Releases.
-

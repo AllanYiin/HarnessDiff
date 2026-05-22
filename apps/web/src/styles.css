@@ -23,8 +23,17 @@
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
 body {
   margin: 0;
+  width: 100%;
+  overflow-x: hidden;
 }
 
 .shell {
@@ -73,6 +82,7 @@ body {
   display: flex;
   align-items: center;
   gap: var(--space-3);
+  min-width: 0;
 }
 
 .topControls label {
@@ -80,6 +90,10 @@ body {
   gap: var(--space-1);
   font-size: 12px;
   color: var(--color-muted);
+}
+
+.topControls {
+  position: relative;
 }
 
 select,
@@ -118,6 +132,49 @@ textarea:disabled {
   border-radius: 8px;
   background: #ffffff;
   color: var(--color-text);
+}
+
+.settingsMenu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  width: min(360px, calc(100vw - 32px));
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-panel);
+  background: var(--color-surface);
+  box-shadow: 0 18px 44px rgb(15 23 42 / 0.16);
+}
+
+.settingsMenu strong {
+  font-size: 13px;
+}
+
+.toggleGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+.topControls .toggleRow {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text);
+  font-size: 12px;
+}
+
+.toggleRow input {
+  flex: 0 0 auto;
+}
+
+.toggleRow span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .fileButton input {
@@ -272,6 +329,7 @@ textarea:disabled {
 
 .segmented {
   display: inline-flex;
+  max-width: 100%;
   padding: 3px;
   border-radius: 8px;
   background: #e2e8f0;
@@ -395,7 +453,14 @@ select:focus {
   }
 
   .topControls {
+    width: 100%;
     flex-wrap: wrap;
+  }
+
+  .settingsMenu {
+    left: 0;
+    right: auto;
+    width: 100%;
   }
 
   .topControls label {
@@ -422,8 +487,28 @@ select:focus {
   }
 
   .composerHeader {
+    min-width: 0;
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .segmented {
+    width: 100%;
+  }
+
+  .segmented button {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .composerTools {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .toggleGrid {
+    grid-template-columns: 1fr;
   }
 
   .splitInputRow {

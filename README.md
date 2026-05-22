@@ -2,13 +2,14 @@
 
 HarnessDiff is a localhost teaching workbench for comparing the same chat task with and without a Harness layer.
 
-Stage 0 provides the project skeleton only:
+Current local milestone:
 
 - `apps/web`: React + Vite + TypeScript frontend scaffold.
 - `apps/api`: FastAPI backend scaffold.
 - `data/projects`: local JSON project storage root.
 - `docs`: architecture, storage, and provider extension notes.
 - `tests`: backend smoke tests.
+- Stage 4 has a first Harness Engine slice: project JSON config, per-run Harness module overrides, Harness-only instruction assembly, and UI toggles.
 
 ## Prerequisites
 
@@ -38,21 +39,50 @@ corepack pnpm install
 corepack pnpm run dev
 ```
 
-The frontend is intentionally a placeholder in Stage 0. Real dual-pane chat behavior starts in later stages.
+The frontend starts as a dual-pane Chat workbench. It sends to the API first and falls back to mock streaming when the backend is unavailable.
 
 ## Environment
 
-Copy `.env.example` to `.env` and set `OPENAI_API_KEY` before the OpenAI streaming stage. Stage 0 does not call OpenAI.
+Copy `.env.example` to `.env` or set `OPENAI_API_KEY` in the local environment before live OpenAI streaming.
+
+## OpenAI Streaming
+
+The backend exposes run streaming through:
+
+- `POST /api/projects/{project_id}/runs`
+- `GET /api/runs/{run_id}/stream`
+
+The first provider is OpenAI Responses API streaming. The frontend attempts the local API first and falls back to mock streaming when the backend is not running, so UI smoke tests can run without an API key.
+
+## Harness Modules
+
+Each project gets `config/harness.default.json`. A run can override individual Harness modules through the UI or API with `harness_modules`.
+
+The current module switches are:
+
+- `context_manifest`
+- `source_map`
+- `guardrails`
+- `output_contract`
+- `planning_preamble`
+- `tool_policy`
+- `memory_selection`
+- `post_answer_critique`
+- `token_budgeter`
+
+These switches affect only the `Harness` pane. `NoHarness` keeps the direct baseline instruction.
 
 ## Stage Boundary
 
-Stage 0 is complete when:
+The initial local milestones are complete through Stage 4 when:
 
 - backend health route works;
 - pytest smoke tests pass;
 - project folders and documentation exist;
 - storage root can be initialized;
-- frontend scaffold files exist for future implementation.
+- dual-pane UI passes desktop/mobile Playwright smoke;
+- OpenAI Responses API streaming works through the provider adapter and run SSE route;
+- Harness module config can be toggled per run and stored in local JSON.
 
 ## Release Notes
 
@@ -65,8 +95,11 @@ python -m pytest
 cd apps/web
 node node_modules\typescript\bin\tsc -b
 node node_modules\vite\bin\vite.js build
-node node_modules\vitest\vitest.mjs run
+node node_modules\vitest\vitest.mjs run src
+node node_modules\@playwright\test\cli.js install chromium
+node node_modules\@playwright\test\cli.js test
 ```
 
 See `docs/release-checklist.md` for the release checklist.
 
+Backend dependencies are listed in `requirements.txt`.

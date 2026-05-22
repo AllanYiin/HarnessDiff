@@ -11,6 +11,8 @@ from pydantic import ValidationError
 
 from app.core.settings import settings
 from app.models.project import ProjectCreate, ProjectDocument, ProjectUpdate, utc_now_iso
+from app.models.run import RunCreate, RunDocument, RunStatus, new_run_document
+from app.providers.base import ProviderEvent
 from app.storage.errors import InvalidProjectIdError, ProjectNotFoundError, StorageCorruptionError
 from app.storage.json_io import read_json, write_json_atomic
 
@@ -79,6 +81,118 @@ class ProjectStore:
             raise InvalidProjectIdError(project_id)
         shutil.rmtree(project_dir)
 
+    def create_run(self, project_id: str, payload: RunCreate) -> RunDocument:
+        self._read_project_document(project_id)
+        runs_dir = self._project_dir(project_id) / "runs"
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        harness_modules = self._effective_harness_modules(project_id, payload.harness_modules)
+        run = new_run_document(
+            schema_version=settings.schema_version,
+            run_id=self._new_run_id(runs_dir),
+            project_id=project_id,
+            turn_index=self._next_turn_index(runs_dir),
+            payload=payload,
+            harness_modules=harness_modules,
+        )
+        run_dir = runs_dir / run.id
+        run_dir.mkdir(parents=True, exist_ok=False)
+        write_json_atomic(run_dir / "run.json", run.model_dump(mode="json"))
+        return run
+
+    def get_run(self, run_id: str) -> RunDocument:
+        run_path = self._find_run_path(run_id)
+        data = read_json(run_path)
+        return RunDocument.model_validate(data)
+
+    def update_run_status(self, project_id: str, run_id: str, status: RunStatus) -> RunDocument:
+        run_dir = self._run_dir(project_id, run_id)
+        run = RunDocument.model_validate(read_json(run_dir / "run.json"))
+        updated = run.model_copy(update={"status": status, "updated_at": utc_now_iso()})
+        write_json_atomic(run_dir / "run.json", updated.model_dump(mode="json"))
+        return updated
+
+    def prepare_pane_run(
+        self,
+        project_id: str,
+        run_id: str,
+        pane: str,
+        prompt: str,
+        instructions: str,
+        harness_modules: dict[str, bool],
+    ) -> None:
+        pane_dir = self._run_dir(project_id, run_id) / pane
+        pane_dir.mkdir(parents=True, exist_ok=True)
+        write_json_atomic(
+            pane_dir / "input.json",
+            {
+                "schema_version": settings.schema_version,
+                "pane": pane,
+                "prompt": prompt,
+                "instructions": instructions,
+                "harness_modules": harness_modules if pane == "Harness" else {},
+                "created_at": utc_now_iso(),
+            },
+        )
+        output_path = pane_dir / "output.json"
+        if not output_path.exists():
+            write_json_atomic(
+                output_path,
+                {
+                    "schema_version": settings.schema_version,
+                    "pane": pane,
+                    "text": "",
+                    "updated_at": utc_now_iso(),
+                },
+            )
+
+    def append_pane_event(
+        self, project_id: str, run_id: str, pane: str, event: ProviderEvent
+    ) -> None:
+        event_payload = {
+            "schema_version": settings.schema_version,
+            "type": event.type,
+            "pane": event.pane,
+            "sequence": event.sequence,
+            "text": event.text,
+            "response_id": event.response_id,
+            "usage": event.usage,
+            "raw": event.raw,
+            "created_at": utc_now_iso(),
+        }
+        self._append_jsonl(self._run_dir(project_id, run_id) / pane / "events.jsonl", event_payload)
+
+    def append_error_event(
+        self, project_id: str, run_id: str, pane: str, error_payload: dict[str, Any]
+    ) -> None:
+        self._append_jsonl(
+            self._run_dir(project_id, run_id) / pane / "events.jsonl",
+            {
+                "schema_version": settings.schema_version,
+                **error_payload,
+                "created_at": utc_now_iso(),
+            },
+        )
+
+    def append_pane_output_delta(self, project_id: str, run_id: str, pane: str, text: str) -> None:
+        output_path = self._run_dir(project_id, run_id) / pane / "output.json"
+        output = read_json(output_path)
+        output["text"] = f"{output.get('text', '')}{text}"
+        output["updated_at"] = utc_now_iso()
+        write_json_atomic(output_path, output)
+
+    def write_pane_usage(
+        self, project_id: str, run_id: str, pane: str, usage: dict[str, Any]
+    ) -> None:
+        write_json_atomic(
+            self._run_dir(project_id, run_id) / pane / "usage.json",
+            {
+                "schema_version": settings.schema_version,
+                "pane": pane,
+                "usage": usage,
+                "created_at": utc_now_iso(),
+            },
+        )
+
     def _read_project_document(self, project_id: str) -> ProjectDocument:
         project_dir = self._project_dir(project_id)
         project_path = project_dir / "project.json"
@@ -114,6 +228,46 @@ class ProjectStore:
             if not (self.projects_dir / project_id).exists():
                 return project_id
 
+    def _new_run_id(self, runs_dir: Path) -> str:
+        while True:
+            run_id = f"run_{uuid4().hex[:16]}"
+            if not (runs_dir / run_id).exists():
+                return run_id
+
+    def _next_turn_index(self, runs_dir: Path) -> int:
+        if not runs_dir.exists():
+            return 0
+        return sum(1 for child in runs_dir.iterdir() if child.is_dir())
+
+    def _run_dir(self, project_id: str, run_id: str) -> Path:
+        if not PROJECT_ID_RE.match(run_id):
+            raise InvalidProjectIdError(run_id)
+        run_dir = (self._project_dir(project_id) / "runs" / run_id).resolve()
+        project_dir = self._project_dir(project_id).resolve()
+        try:
+            run_dir.relative_to(project_dir)
+        except ValueError:
+            raise InvalidProjectIdError(run_id) from None
+        if not run_dir.exists():
+            raise ProjectNotFoundError(run_id)
+        return run_dir
+
+    def _find_run_path(self, run_id: str) -> Path:
+        if not PROJECT_ID_RE.match(run_id):
+            raise InvalidProjectIdError(run_id)
+        self.ensure_dirs()
+        for project_dir in self.projects_dir.iterdir():
+            run_path = project_dir / "runs" / run_id / "run.json"
+            if run_path.exists():
+                return run_path
+        raise ProjectNotFoundError(run_id)
+
+    def _append_jsonl(self, path: Path, payload: dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False))
+            handle.write("\n")
+
     def _write_repair_report(self, project_id: str, project_dir: Path, project_path: Path) -> Path:
         report_path = project_dir / "repair-report.json"
         report: dict[str, Any] = {
@@ -144,3 +298,19 @@ class ProjectStore:
             },
         }
 
+    def _effective_harness_modules(
+        self, project_id: str, overrides: dict[str, bool] | None
+    ) -> dict[str, bool]:
+        config_path = self._project_dir(project_id) / "config" / "harness.default.json"
+        if config_path.exists():
+            config = read_json(config_path)
+        else:
+            config = self._default_harness_config(settings.schema_version)
+        modules = {
+            name: bool(value.get("enabled", False))
+            for name, value in config.get("modules", {}).items()
+            if isinstance(value, dict)
+        }
+        if overrides:
+            modules.update({name: bool(enabled) for name, enabled in overrides.items()})
+        return modules

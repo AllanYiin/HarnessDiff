@@ -10,6 +10,7 @@ data/
     {project_id}/
       project.json
       config/
+        harness.default.json
       runs/
 ```
 
@@ -39,6 +40,62 @@ runs/
     NoHarness/
     analysis/
 ```
+
+## Run Document
+
+```json
+{
+  "schema_version": "2026-05-22.1",
+  "id": "run_...",
+  "project_id": "proj_...",
+  "turn_index": 0,
+  "input_mode": "integrated",
+  "model": "gpt-5.4-mini",
+  "reasoning_effort": "medium",
+  "target_panes": ["NoHarness", "Harness"],
+  "harness_modules": {
+    "context_manifest": true,
+    "source_map": true,
+    "guardrails": true,
+    "output_contract": true,
+    "planning_preamble": false,
+    "tool_policy": true,
+    "memory_selection": true,
+    "post_answer_critique": true,
+    "token_budgeter": true
+  },
+  "status": "submitted",
+  "prompt": "User prompt",
+  "created_at": "2026-05-22T00:00:00+00:00",
+  "updated_at": "2026-05-22T00:00:00+00:00"
+}
+```
+
+Run status values are `submitted`, `running`, `completed`, `failed`, and `cancelled`.
+
+## Harness Config
+
+Each project stores its default Harness module profile at `config/harness.default.json`:
+
+```json
+{
+  "schema_version": "2026-05-22.1",
+  "profile": "harness.default",
+  "modules": {
+    "context_manifest": { "enabled": true },
+    "source_map": { "enabled": true },
+    "guardrails": { "enabled": true },
+    "output_contract": { "enabled": true },
+    "planning_preamble": { "enabled": false },
+    "tool_policy": { "enabled": true },
+    "memory_selection": { "enabled": true },
+    "post_answer_critique": { "enabled": true },
+    "token_budgeter": { "enabled": true }
+  }
+}
+```
+
+Run-level `harness_modules` are the effective booleans after applying API/UI overrides to the project config. They are stored in `run.json` and repeated in `Harness/input.json` with the final instructions for traceability.
 
 ## Versioning
 
