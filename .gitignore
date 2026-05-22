@@ -15,6 +15,10 @@ playwright-report/
 .pnpm-store/
 .env
 .env.local
+.launcher.env
+.runtime/
+logs/
+release/
 .DS_Store
 data/projects/*
 !data/projects/.gitkeep

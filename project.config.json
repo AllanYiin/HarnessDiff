@@ -1,0 +1,17 @@
+{
+  "name": "HarnessDiff",
+  "usage_scene": "scene_b_shared_tool",
+  "project_profile": {
+    "user_type": "small_team",
+    "usage_duration": "long_term",
+    "change_frequency": "occasional",
+    "failure_cost": "multi_user_disruption"
+  },
+  "apsm_version": "1.0",
+  "archetype": "web_app",
+  "architecture": "separated",
+  "frontend": "node_spa",
+  "backend": "python_api",
+  "layout_variant": "apps",
+  "version": "0.1.0"
+}

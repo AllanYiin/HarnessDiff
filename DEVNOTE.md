@@ -9,7 +9,7 @@
 ## 📌 SNAPSHOT — 當前狀態
 <!-- 這一整段每次 /devnote 會被覆寫，只反映「到目前為止的最新狀態」 -->
 
-**最後更新**：2026-05-23 02:25
+**最後更新**：2026-05-23 02:43
 
 ### 需求狀態
 - [x] Stage 0：localhost web app / FastAPI skeleton、README、env 樣板、storage/provider docs。
@@ -20,6 +20,7 @@
 - [x] Stage 5：本回合與累計分析器第一版完成；analysis artifact、SSE `analysis_ready`、API retrieval、前端 summary metrics、current/cumulative usage 與 context sections 均已接上。
 - [x] Stage 6：整合/回歸/邊界測試完成；provider failure、invalid ids、lazy analysis rebuild、single-pane analysis、settings disclosure、analysis_ready e2e 均已納入。
 - [x] Stage 7：文件化與交付完成；README quick start、API reference、troubleshooting、specs/product-spec、specs/stage-plan、release checklist 與 docs audit 均已收尾。
+- [x] 一鍵安裝啟動機制：依 `vibe-coding-guidelines` 補 `project.config.json`、`AGENTS.md`、`specs/requirements.md`、`todo.md`、launcher generator、APSM validator、`run_app.*` 與 runtime metadata。
 
 ### 未解問題
 - 本機 `npm` shim 壞掉，已改用 Corepack pnpm 的實際路徑或 `corepack pnpm`。
@@ -36,6 +37,8 @@
 - **Failed run semantics**：任一 pane provider error 時 run 會標記 `failed`、送出 `run_failed`，不產生 analysis，避免 partial output 被誤認為完整比較。
 - **Documentation handoff**：Stage 7 文件分工為 README 入口、`docs/` 操作/參考、`specs/` 規格/階段驗收、`DEVNOTE.md` session handoff。
 - **Stage 2 visual gate**：獨立 Playwright Chromium 已取代 Codex in-app browser 截圖，desktop/mobile e2e 會輸出 screenshots。
+- **One-click launcher boundary**：`run_app.bat` / `run_app.command` / `run_app.sh` 皆由 `scripts/project_launcher.py` 生成；若啟動行為要改，先改 generator 再重產 wrapper。
+- **APSM source of truth**：`project.config.json` 宣告 `scene_b_shared_tool` + `web_app/separated/node_spa/python_api`，並以 `layout_variant=apps` 對齊既有 `apps/api`、`apps/web` 目錄。
 
 ### 已知地雷（仍需注意）
 > 踩過且未來仍可能重踩的坑的一句話提醒。已徹底不可能重現的不列。
@@ -48,6 +51,8 @@
 - **SDK raw event 序列化**：OpenAI SDK event 的 `model_dump()` 可能在本機環境丟 TypeError；raw artifact logging 必須容錯降級。
 - **Frontend-design audit scripts missing**：此 repo 目前沒有 `audit:frontend-runtime` 或 `audit_frontend_principles.py`；UI gate 暫以獨立 Playwright desktop/mobile 替代。
 - **PowerShell 文字讀寫**：讀寫文字檔需顯式 `-Encoding UTF8`，不可裸用 `Get-Content` / `Set-Content`。
+- **Launcher install 需網路**：`project_launcher.py --ensure-only` 會安裝 Python/Node 依賴；在 Codex sandbox 內可能因網路被擋，需要 escalated 執行。
+- **Windows launcher 前端路徑**：曾產生相對路徑二次 `cd apps\web` 的風險；目前 generator 已改用 `%~dp0apps\web` 絕對路徑。
 
 ---
 
@@ -101,8 +106,6 @@
 
 ### 備註
 - 驗證結果：`python -m pytest`、`python -m compileall apps\api`、TypeScript build、Vitest、Vite build、Playwright desktop/mobile 均已通過。
-
----
 
 ## [2026-05-23 02:19] Stage 6 regression and boundary tests
 
@@ -212,3 +215,34 @@
 
 ### 備註
 - 驗證結果：`python -m pytest`、`python -m compileall apps\api`、TypeScript build、Vitest、Vite build、Playwright desktop/mobile 均已通過。
+
+---
+
+## [2026-05-23 02:43] 一鍵安裝啟動機制
+
+### 本次做了什麼（增量）
+依 `vibe-coding-guidelines` 將 repo 補成可一鍵安裝啟動的交付形態：新增 `project.config.json`、根目錄 `AGENTS.md`、`specs/requirements.md`、`todo.md`，導入 `scripts/project_launcher.py`、`scripts/project_launcher_posix.py`、`scripts/apsm_validate.py`，並新增 `scripts/start_backend.py` 作為 `apps/api` 的啟動橋接。已生成 `run_app.bat`、`run_app.command`、`run_app.sh`，並產出 `.runtime/ports.json`、`.runtime/launcher_state.json` 與 `logs/*.log` metadata。
+
+### 本次重大技術決策
+- **沿用 skill launcher 生成鏈**
+  - 內容：`run_app.*` 不手寫主流程，所有 wrapper 由 `scripts/project_launcher.py` 生成。
+  - 理由：符合 skill 的一鍵交付規範，也避免 Windows/macOS/Linux wrapper 行為分裂。
+  - 影響：未來要調整啟動、安裝、port 或 logs 行為時，先改 generator 並重跑 `python scripts/project_launcher.py --package`。
+- **APSM 採 apps layout variant**
+  - 內容：在 `project.config.json` 保留 `web_app/separated/node_spa/python_api`，另加 `layout_variant=apps`，validator 也認得 `apps/api` + `apps/web`。
+  - 理由：既有 repo 已是 `apps/` 結構，為了符合 APSM 又不重搬穩定目錄，需要顯式宣告 layout 變體。
+  - 影響：APSM strict validation 以 `apps/api/app/main.py`、`apps/web/package.json`、`apps/web/index.html` 為必要檔案。
+
+### 本次失敗經驗與填坑
+- **Windows frontend launcher 相對路徑會重複 cd**
+  - 試過無效：原生成結果先在父 cmd `cd apps\web`，再在新 frontend cmd 內 `cd apps\web`。
+  - 最終解法：改 generator 以 `%~dp0apps\web` 組出絕對 `FRONTEND_DIR`，重產 `run_app.bat`。
+  - 根因：Windows `start cmd /k` 的子程序繼承目前目錄；父程序先切目錄後，子程序再用相同相對路徑會變成二次巢狀。
+- **sandbox 內安裝依賴會被網路限制擋住**
+  - 試過無效：直接跑 `python scripts\project_launcher.py --ensure-only`，pip 查 PyPI 時回 WinError 10013。
+  - 最終解法：依 sandbox escalation 流程重跑同一指令。
+  - 根因：launcher 的首次安裝是必要網路操作，不能假設受限 sandbox 可直接連 registry。
+
+### 備註
+- 官方概念核對：Python `venv` 用於專案隔離環境；Node Corepack 可代理 pnpm 這類 package manager，與目前一鍵啟動設計一致。
+- 驗證結果：`python scripts\apsm_validate.py --project . --strict`、`python scripts\project_launcher.py --ensure-only`、`python -m pytest`、`python -m compileall apps\api scripts`、TypeScript build、Vitest、Vite build、Playwright desktop/mobile 4 tests 均已通過；`python scripts\project_launcher.py --package --package-out release\HarnessDiff-launcher-smoke.zip` 已產出測試 ZIP。

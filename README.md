@@ -25,6 +25,20 @@ It currently implements the Chat surface only. Workflow, Agent, and MultiAgents 
 
 ## Quick Start
 
+### One-click start
+
+For normal local use, start from the generated launcher for your platform:
+
+- Windows: double-click `run_app.bat`
+- macOS: run `chmod +x run_app.command` once if needed, then double-click `run_app.command`
+- Linux: run `chmod +x run_app.sh` once if needed, then run `./run_app.sh`
+
+The launcher creates `.venv`, installs Python dependencies from `requirements.txt`, installs frontend dependencies with Corepack/pnpm, starts the FastAPI backend and Vite frontend, then writes runtime metadata to `.runtime/` and logs to `logs/`.
+
+Live OpenAI streaming requires `OPENAI_API_KEY` from your shell environment or `.env`.
+
+### Manual start
+
 From the repository root:
 
 ```powershell
@@ -57,6 +71,8 @@ Open the Vite URL shown in the terminal, normally `http://localhost:5173`.
 ## Verify
 
 ```powershell
+python scripts\apsm_validate.py --project . --strict
+python scripts\project_launcher.py --ensure-only
 python -m pytest
 python -m compileall apps\api
 node apps\web\node_modules\typescript\bin\tsc -b apps\web
@@ -127,6 +143,7 @@ These switches affect only the `Harness` pane. `NoHarness` keeps the direct base
 - `data`: ignored local JSON runtime data
 - `docs`: architecture, API, storage, provider, release, troubleshooting docs
 - `specs`: product spec and stage acceptance notes
+- `scripts`: APSM validator, one-click launcher generator, backend launch bridge
 - `tests`: backend pytest coverage
 - `DEVNOTE.md`: cumulative development handoff notes
 
@@ -140,6 +157,7 @@ These switches affect only the `Harness` pane. `NoHarness` keeps the direct base
 - [Release Checklist](docs/release-checklist.md)
 - [Product Spec](specs/product-spec.md)
 - [Stage Plan](specs/stage-plan.md)
+- [Executable Requirements](specs/requirements.md)
 
 ## Release Notes
 
