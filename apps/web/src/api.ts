@@ -2,10 +2,29 @@ import type { HarnessModules, InputMode, PaneId } from "./types";
 
 type Project = {
   id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
 };
 
 type Run = {
   id: string;
+};
+
+export type ProjectSummary = Project;
+
+export type TranscriptRun = {
+  id: string;
+  prompt: string;
+  target_panes: PaneId[];
+  input_mode: InputMode;
+  status: string;
+  panes: Partial<Record<PaneId, { output_text: string }>>;
+};
+
+export type ProjectTranscript = {
+  project: Project;
+  runs: TranscriptRun[];
 };
 
 export type RunStreamEvent = {
@@ -69,6 +88,57 @@ export type AnalysisDocument = {
   notes: string[];
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function asString(value: unknown, fallback = "") {
+  return typeof value === "string" ? value : fallback;
+}
+
+function isPaneId(value: unknown): value is PaneId {
+  return value === "NoHarness" || value === "Harness";
+}
+
+function normalizeProject(value: unknown, fallbackName: string): Project {
+  if (!isRecord(value) || typeof value.id !== "string") {
+    throw new Error("Project response is missing an id");
+  }
+  const now = new Date().toISOString();
+  return {
+    id: value.id,
+    name: asString(value.name, fallbackName),
+    created_at: asString(value.created_at, now),
+    updated_at: asString(value.updated_at, now)
+  };
+}
+
+function normalizeTranscriptRun(value: unknown): TranscriptRun | null {
+  if (!isRecord(value) || typeof value.id !== "string" || typeof value.prompt !== "string") {
+    return null;
+  }
+  const targetPanes = Array.isArray(value.target_panes)
+    ? value.target_panes.filter(isPaneId)
+    : [];
+  const panes: TranscriptRun["panes"] = {};
+  if (isRecord(value.panes)) {
+    for (const pane of targetPanes) {
+      const panePayload = value.panes[pane];
+      panes[pane] = {
+        output_text: isRecord(panePayload) ? asString(panePayload.output_text) : ""
+      };
+    }
+  }
+  return {
+    id: value.id,
+    prompt: value.prompt,
+    target_panes: targetPanes,
+    input_mode: value.input_mode === "independent" ? "independent" : "integrated",
+    status: asString(value.status, "completed"),
+    panes
+  };
+}
+
 export async function createProject(name: string): Promise<Project> {
   const response = await fetch("/api/projects", {
     method: "POST",
@@ -78,7 +148,56 @@ export async function createProject(name: string): Promise<Project> {
   if (!response.ok) {
     throw new Error(`Failed to create project: ${response.status}`);
   }
-  return response.json();
+  return normalizeProject(await response.json(), name);
+}
+
+export async function listProjects(): Promise<ProjectSummary[]> {
+  const response = await fetch("/api/projects");
+  if (!response.ok) {
+    throw new Error(`Failed to list projects: ${response.status}`);
+  }
+  const data = await response.json();
+  if (!isRecord(data) || !Array.isArray(data.projects)) {
+    return [];
+  }
+  return data.projects.flatMap((project) => {
+    try {
+      return [normalizeProject(project, "未命名對話")];
+    } catch {
+      return [];
+    }
+  });
+}
+
+export async function updateProjectName(projectId: string, name: string): Promise<Project> {
+  const response = await fetch(`/api/projects/${projectId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name })
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to rename project: ${response.status}`);
+  }
+  return normalizeProject(await response.json(), name);
+}
+
+export async function getProjectTranscript(projectId: string): Promise<ProjectTranscript> {
+  const response = await fetch(`/api/projects/${projectId}/transcript`);
+  if (!response.ok) {
+    throw new Error(`Failed to load transcript: ${response.status}`);
+  }
+  const data = await response.json();
+  if (!isRecord(data)) {
+    throw new Error("Transcript response is not an object");
+  }
+  const project = normalizeProject(data.project, "未命名對話");
+  const runs = Array.isArray(data.runs)
+    ? data.runs.flatMap((run) => {
+        const normalized = normalizeTranscriptRun(run);
+        return normalized ? [normalized] : [];
+      })
+    : [];
+  return { project, runs };
 }
 
 export async function createRun(params: {
@@ -118,10 +237,12 @@ export async function getRunAnalysis(runId: string): Promise<AnalysisDocument> {
 
 export async function streamRun(
   runId: string,
-  onEvent: (event: RunStreamEvent) => void
+  onEvent: (event: RunStreamEvent) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   const response = await fetch(`/api/runs/${runId}/stream`, {
-    headers: { Accept: "text/event-stream" }
+    headers: { Accept: "text/event-stream" },
+    signal
   });
   if (!response.ok || !response.body) {
     throw new Error(`Failed to stream run: ${response.status}`);

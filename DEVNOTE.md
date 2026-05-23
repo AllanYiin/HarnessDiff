@@ -9,7 +9,7 @@
 ## 📌 SNAPSHOT — 當前狀態
 <!-- 這一整段每次 /devnote 會被覆寫，只反映「到目前為止的最新狀態」 -->
 
-**最後更新**：2026-05-23 02:43
+**最後更新**：2026-05-23 12:28
 
 ### 需求狀態
 - [x] Stage 0：localhost web app / FastAPI skeleton、README、env 樣板、storage/provider docs。
@@ -21,6 +21,7 @@
 - [x] Stage 6：整合/回歸/邊界測試完成；provider failure、invalid ids、lazy analysis rebuild、single-pane analysis、settings disclosure、analysis_ready e2e 均已納入。
 - [x] Stage 7：文件化與交付完成；README quick start、API reference、troubleshooting、specs/product-spec、specs/stage-plan、release checklist 與 docs audit 均已收尾。
 - [x] 一鍵安裝啟動機制：依 `vibe-coding-guidelines` 補 `project.config.json`、`AGENTS.md`、`specs/requirements.md`、`todo.md`、launcher generator、APSM validator、`run_app.*` 與 runtime metadata。
+- [x] Conversation controls：新增新對話、歷史對話 drawer、自動命名、transcript API、暫停執行，以及 Markdown render/copy raw Markdown。
 
 ### 未解問題
 - 本機 `npm` shim 壞掉，已改用 Corepack pnpm 的實際路徑或 `corepack pnpm`。
@@ -39,6 +40,7 @@
 - **Stage 2 visual gate**：獨立 Playwright Chromium 已取代 Codex in-app browser 截圖，desktop/mobile e2e 會輸出 screenshots。
 - **One-click launcher boundary**：`run_app.bat` / `run_app.command` / `run_app.sh` 皆由 `scripts/project_launcher.py` 生成；若啟動行為要改，先改 generator 再重產 wrapper。
 - **APSM source of truth**：`project.config.json` 宣告 `scene_b_shared_tool` + `web_app/separated/node_spa/python_api`，並以 `layout_variant=apps` 對齊既有 `apps/api`、`apps/web` 目錄。
+- **Project as conversation**：Chat MVP 不另建 conversation storage；Project metadata 是對話 metadata，runs/pane outputs 是 transcript 來源。
 
 ### 已知地雷（仍需注意）
 > 踩過且未來仍可能重踩的坑的一句話提醒。已徹底不可能重現的不列。
@@ -53,6 +55,8 @@
 - **PowerShell 文字讀寫**：讀寫文字檔需顯式 `-Encoding UTF8`，不可裸用 `Get-Content` / `Set-Content`。
 - **Launcher install 需網路**：`project_launcher.py --ensure-only` 會安裝 Python/Node 依賴；在 Codex sandbox 內可能因網路被擋，需要 escalated 執行。
 - **Windows launcher 前端路徑**：曾產生相對路徑二次 `cd apps\web` 的風險；目前 generator 已改用 `%~dp0apps\web` 絕對路徑。
+- **Windows cmd quoting**：`cmd /k """%PYEXE%"" ..."` 會把 venv `python.exe` 誤當 Python 腳本讀入；Windows launcher 目前改用 `scripts\launch_backend.bat` / `scripts\launch_frontend.bat` helper，避免巢狀 `cmd /k` 引號。
+- **E2E backend leakage**：若本機 8000 有真實 backend，原本 fallback smoke 會拿到 live output；離線 smoke 需明確 abort `/api/**`。
 
 ---
 
@@ -246,3 +250,77 @@
 ### 備註
 - 官方概念核對：Python `venv` 用於專案隔離環境；Node Corepack 可代理 pnpm 這類 package manager，與目前一鍵啟動設計一致。
 - 驗證結果：`python scripts\apsm_validate.py --project . --strict`、`python scripts\project_launcher.py --ensure-only`、`python -m pytest`、`python -m compileall apps\api scripts`、TypeScript build、Vitest、Vite build、Playwright desktop/mobile 4 tests 均已通過；`python scripts\project_launcher.py --package --package-out release\HarnessDiff-launcher-smoke.zip` 已產出測試 ZIP。
+
+---
+
+## [2026-05-23 04:35] Windows launcher quoting fix
+
+### 本次做了什麼（增量）
+修正 `run_app.bat` 產生出的 backend/frontend 啟動命令。backend 由容易誤解析的 `cmd /k """%PYEXE%"" ..."` 改為 `start /d "%~dp0" cmd /k "call ""%PYEXE%"" ..."`；frontend 改為 `start /d "%FRONTEND_DIR%" cmd /k "call corepack ..."`，避免目前目錄繼承與 batch/cmd 呼叫中斷。
+
+### 本次重大技術決策
+- **Windows wrapper 繼續由 generator 修正**
+  - 內容：只改 `scripts/project_launcher.py` 後重跑 `python scripts\project_launcher.py --package ...`，不直接手修 `run_app.bat`。
+  - 理由：`run_app.*` 是 skill 規範要求的 generator 產物，手修 wrapper 會讓下一次產生又回歸。
+  - 影響：後續所有 Windows launcher quoting 修正都應落在 generator。
+
+### 本次失敗經驗與填坑
+- **venv python.exe 被當成 Python 腳本**
+  - 試過無效：原本 `cmd /k """%PYEXE%"" "scripts\start_backend.py" ..."` 在 Windows 下會讓 Python 嘗試讀入 `.venv\Scripts\python.exe` bytes，導致 `SyntaxError: Non-UTF-8 code starting with '\x90'`。
+  - 最終解法：改成 `call ""%PYEXE%"" ""%~dp0scripts\start_backend.py""`，並以 `start /d "%~dp0"` 固定 backend 工作目錄。
+  - 根因：`start` 與 `cmd /k` 各自處理引號；第一層 command string 不是一般 shell quote，EXE 路徑前後多餘引號會改變 argv 解析。
+- **frontend log 顯示找不到路徑**
+  - 試過無效：在子 `cmd /k` 內用 `cd /d "%FRONTEND_DIR%" && ...`。
+  - 最終解法：改用 `start "Frontend" /d "%FRONTEND_DIR%" cmd /k ...`，讓 Windows `start` 直接設定子程序工作目錄。
+  - 根因：子 cmd 的起始目錄與 batch 變數/引號展開互相耦合，`/d` 比在 command string 裡再 `cd` 穩定。
+
+### 備註
+- 驗證結果：重產 `run_app.*` 與 ZIP；`cmd /c call ""...\python.exe"" -c ...` 可正確使用 venv Python；`cmd /c pushd apps\web && call corepack pnpm --version` 回傳 `11.2.2`；`python scripts\apsm_validate.py --project . --strict` 通過。
+
+---
+
+## [2026-05-23 05:02] Windows helper launcher fix
+
+### 本次做了什麼（增量）
+確認使用者實際雙擊 `run_app.bat` 時，上一版 `start ... cmd /k "call ""%PYEXE%"" ..."` 仍會把 `.venv\Scripts\python.exe` 當成腳本讀取。改為由 `project_launcher.py` 產生 `scripts\launch_backend.bat` 與 `scripts\launch_frontend.bat`，`run_app.bat` 只用 `start` 開啟這兩個 helper。
+
+### 本次重大技術決策
+- **Windows 子服務啟動改走 helper batch**
+  - 內容：backend/frontend 的實際 command、log redirection、working directory 都放到 helper batch。
+  - 理由：Windows `cmd /k` 的巢狀引號行為和雙擊 batch 情境不穩定；helper batch 讓每一層只處理一個簡單命令。
+  - 影響：後續調整 Windows 啟動流程時，仍應改 generator，並重產 `run_app.bat` 與 helper batch。
+
+### 本次失敗經驗與填坑
+- **`call ""%PYEXE%""` 在最小重現仍失敗**
+  - 試過無效：`start "Backend" /d "%~dp0" cmd /k "call ""%PYEXE%"" ..."`。
+  - 最終解法：`run_app.bat` 改成 `start "Backend" /d "%~dp0" "%~dp0scripts\launch_backend.bat"`；helper 內直接執行 `"%PYEXE%" "%PROJECT_ROOT%\scripts\start_backend.py"`。
+  - 根因：`cmd /k` 對 `<string>` 的引號處理會剝離外層 quote 且保留內層 quote 的規則很容易造成 argv 混淆。
+
+### 備註
+- 驗證結果：直接執行 `scripts\launch_backend.bat` 後 `127.0.0.1:8000` 可連，log 顯示 Uvicorn started；直接執行 `scripts\launch_frontend.bat` 後 `127.0.0.1:5173` 可連，Vite 正常監聽；測試後已關閉兩個驗證 server。
+
+---
+
+## [2026-05-23 12:28] Conversation controls and Markdown UX
+
+### 本次做了什麼（增量）
+補齊使用者指出的 Chat workbench 缺口：新增 TopBar「新對話」與「歷史」入口、歷史對話 drawer、自動用第一個 prompt 命名 project、`GET /projects/{project_id}/transcript` 供前端重建左右 pane 訊息、Composer「暫停執行」按鈕，以及 assistant/user 訊息 Markdown 排版與複製原始 Markdown。
+
+### 本次重大技術決策
+- **Project 即 Conversation**
+  - 內容：不新增第二套 conversation storage；沿用 Project 作為對話紀錄單位，run artifacts 作為 transcript。
+  - 理由：既有本機 JSON 已以 project/runs 分層保存完整上下文；重複建 conversation 層會增加遷移和一致性成本。
+  - 影響：歷史列表讀 `GET /projects`，歷史內容讀 `GET /projects/{project_id}/transcript`。
+- **暫停先取消前端 stream**
+  - 內容：前端用 `AbortController` 中止 SSE fetch，並將當前 streaming message 收尾為 done。
+  - 理由：Fetch/stream 的標準取消方式是 AbortController；後端已在 stream CancelledError 路徑標記 run cancelled。
+  - 影響：未來若要顯示更細的取消原因，可補 `run_cancelled` SSE event 或專用 cancel route。
+
+### 本次失敗經驗與填坑
+- **Playwright smoke 連到真實 backend**
+  - 試過無效：沿用原本期待 mock fallback 文案的 smoke test。
+  - 最終解法：在 smoke test 明確 abort `/api/**`，讓測試只驗證離線 UI fallback，不受本機 8000 是否正在跑影響。
+  - 根因：一鍵 launcher 讓 backend 更容易常駐，e2e 測試不能假設 API 一定 unavailable。
+
+### 備註
+- 驗證結果：`python -m pytest` 14 passed、TypeScript build、Vitest、Vite build、Playwright desktop/mobile 10 tests passed。

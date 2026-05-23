@@ -1,15 +1,20 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AnalysisSummary } from "./components/AnalysisSummary";
 import { ChatPane } from "./components/ChatPane";
 import { Composer } from "./components/Composer";
+import { HistoryPanel } from "./components/HistoryPanel";
 import { TopBar } from "./components/TopBar";
 import {
   createProject,
   createRun,
+  getProjectTranscript,
   getRunAnalysis,
+  listProjects,
   streamRun,
+  updateProjectName,
   type AnalysisDocument,
+  type ProjectSummary,
   type RunStreamEvent
 } from "./api";
 import { nextInputModeAfterCompletedTurn } from "./domain/inputMode";
@@ -24,6 +29,8 @@ import type {
 } from "./types";
 
 const panes: PaneId[] = ["NoHarness", "Harness"];
+const newConversationName = "新對話";
+const activeProjectStorageKey = "harnessdiff.activeProjectId";
 
 const defaultHarnessModules: HarnessModules = {
   context_manifest: true,
@@ -59,21 +66,39 @@ const initialPaneState: PaneState = {
   streaming: false
 };
 
+function createInitialPaneState(): Record<PaneId, PaneState> {
+  return {
+    NoHarness: { ...initialPaneState, messages: [] },
+    Harness: { ...initialPaneState, messages: [] }
+  };
+}
+
+function titleFromPrompt(prompt: string) {
+  const compact = prompt.replace(/\s+/g, " ").trim();
+  return compact.length > 32 ? `${compact.slice(0, 32)}...` : compact || newConversationName;
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
 export function App() {
   const [model, setModel] = useState("gpt-5.4-mini");
   const [reasoningEffort, setReasoningEffort] = useState("medium");
   const [turnCount, setTurnCount] = useState(0);
   const [inputMode, setInputMode] = useState<InputMode>("integrated");
   const [projectId, setProjectId] = useState<string | null>(null);
+  const [projectName, setProjectName] = useState(newConversationName);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [harnessModules, setHarnessModules] = useState<HarnessModules>(defaultHarnessModules);
   const [analysis, setAnalysis] = useState<AnalysisDocument | null>(null);
   const [integratedDraft, setIntegratedDraft] = useState("");
   const [attachments, setAttachments] = useState<AttachmentPreview[]>([]);
-  const [paneState, setPaneState] = useState<Record<PaneId, PaneState>>({
-    NoHarness: { ...initialPaneState },
-    Harness: { ...initialPaneState }
-  });
+  const [paneState, setPaneState] = useState<Record<PaneId, PaneState>>(createInitialPaneState);
   const timers = useRef<number[]>([]);
+  const activeStreamController = useRef<AbortController | null>(null);
 
   const running = useMemo(
     () => panes.some((pane) => paneState[pane].streaming),
@@ -85,6 +110,117 @@ export function App() {
       ...current,
       [pane]: next(current[pane])
     }));
+  }
+
+  async function refreshProjects() {
+    setHistoryLoading(true);
+    try {
+      const nextProjects = await listProjects();
+      setProjects(nextProjects);
+      return nextProjects;
+    } catch {
+      return [];
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    let ignore = false;
+    refreshProjects().then((loadedProjects) => {
+      if (ignore) {
+        return;
+      }
+      const savedProjectId = window.localStorage.getItem(activeProjectStorageKey);
+      const savedProject = loadedProjects.find((project) => project.id === savedProjectId);
+      if (savedProject) {
+        loadConversation(savedProject.id);
+      }
+    });
+
+    return () => {
+      ignore = true;
+      activeStreamController.current?.abort();
+      clearTimers();
+    };
+  }, []);
+
+  function clearTimers() {
+    timers.current.forEach((timer) => window.clearTimeout(timer));
+    timers.current = [];
+  }
+
+  function resetConversationState(nextProjectId: string | null, nextProjectName = newConversationName) {
+    clearTimers();
+    activeStreamController.current?.abort();
+    activeStreamController.current = null;
+    setProjectId(nextProjectId);
+    setProjectName(nextProjectName);
+    setTurnCount(0);
+    setInputMode("integrated");
+    setAnalysis(null);
+    setIntegratedDraft("");
+    setAttachments([]);
+    setPaneState(createInitialPaneState());
+    if (nextProjectId) {
+      window.localStorage.setItem(activeProjectStorageKey, nextProjectId);
+    } else {
+      window.localStorage.removeItem(activeProjectStorageKey);
+    }
+  }
+
+  async function startNewConversation() {
+    resetConversationState(null);
+    try {
+      const project = await createProject(newConversationName);
+      setProjectId(project.id);
+      setProjectName(project.name);
+      window.localStorage.setItem(activeProjectStorageKey, project.id);
+      await refreshProjects();
+    } catch {
+      setHistoryOpen(false);
+    }
+  }
+
+  async function loadConversation(nextProjectId: string) {
+    if (running) {
+      pauseExecution();
+    }
+    setHistoryLoading(true);
+    try {
+      const transcript = await getProjectTranscript(nextProjectId);
+      const nextPaneState = createInitialPaneState();
+      for (const run of transcript.runs) {
+        for (const pane of panes) {
+          if (!run.target_panes.includes(pane)) {
+            continue;
+          }
+          nextPaneState[pane].messages.push({
+            id: `${run.id}_${pane}_user`,
+            role: "user",
+            text: run.prompt,
+            status: "done"
+          });
+          const output = run.panes[pane]?.output_text ?? "";
+          nextPaneState[pane].messages.push({
+            id: `${run.id}_${pane}_assistant`,
+            role: "assistant",
+            text: output || (run.status === "cancelled" ? "已暫停。" : ""),
+            status: "done"
+          });
+        }
+      }
+      setProjectId(transcript.project.id);
+      setProjectName(transcript.project.name);
+      setPaneState(nextPaneState);
+      setTurnCount(transcript.runs.length);
+      setInputMode(transcript.runs.length > 0 ? "independent" : "integrated");
+      setAnalysis(null);
+      window.localStorage.setItem(activeProjectStorageKey, transcript.project.id);
+      setHistoryOpen(false);
+    } finally {
+      setHistoryLoading(false);
+    }
   }
 
   function streamMockResponse(pane: PaneId, prompt: string) {
@@ -163,18 +299,32 @@ export function App() {
     }
   }
 
-  async function ensureProject() {
+  async function ensureProject(prompt: string) {
+    const autoName = titleFromPrompt(prompt);
     if (projectId) {
+      if (turnCount === 0 && projectName === newConversationName) {
+        updateProjectName(projectId, autoName)
+          .then((project) => {
+            setProjectName(project.name);
+            refreshProjects();
+          })
+          .catch(() => undefined);
+      }
       return projectId;
     }
-    const project = await createProject("HarnessDiff local session");
+    const project = await createProject(autoName);
     setProjectId(project.id);
+    setProjectName(project.name);
+    window.localStorage.setItem(activeProjectStorageKey, project.id);
+    refreshProjects();
     return project.id;
   }
 
   async function submitWithApi(prompt: string, targetPanes: PaneId[], mode: InputMode) {
-    const activeProjectId = await ensureProject();
+    const activeProjectId = await ensureProject(prompt);
     setAnalysis(null);
+    const controller = new AbortController();
+    activeStreamController.current = controller;
     const assistantIds = {
       NoHarness: `assistant_${crypto.randomUUID()}`,
       Harness: `assistant_${crypto.randomUUID()}`
@@ -189,13 +339,24 @@ export function App() {
       harnessModules
     });
     targetPanes.forEach((pane) => prepareStreamingPane(pane, prompt, assistantIds[pane]));
-    await streamRun(run.id, (event) => {
-      if (event.type === "analysis_ready" && event.analysis) {
-        setAnalysis(event.analysis);
+    try {
+      await streamRun(
+        run.id,
+        (event) => {
+          if (event.type === "analysis_ready" && event.analysis) {
+            setAnalysis(event.analysis);
+          }
+          applyStreamEvent(event, assistantIds);
+        },
+        controller.signal
+      );
+    } finally {
+      if (activeStreamController.current === controller) {
+        activeStreamController.current = null;
       }
-      applyStreamEvent(event, assistantIds);
-    });
+    }
     getRunAnalysis(run.id).then(setAnalysis).catch(() => undefined);
+    refreshProjects();
     setTurnCount((current) => {
       const next = current + 1;
       setInputMode((currentMode) => nextInputModeAfterCompletedTurn(current, currentMode));
@@ -220,7 +381,10 @@ export function App() {
       return;
     }
     setIntegratedDraft("");
-    submitWithApi(prompt, panes, "integrated").catch(() => {
+    submitWithApi(prompt, panes, "integrated").catch((error) => {
+      if (isAbortError(error)) {
+        return;
+      }
       setAnalysis(null);
       panes.forEach((pane) => streamMockResponse(pane, prompt));
       completeTurnAfterMock();
@@ -233,7 +397,10 @@ export function App() {
       return;
     }
     updatePane(pane, (current) => ({ ...current, draft: "" }));
-    submitWithApi(prompt, [pane], "independent").catch(() => {
+    submitWithApi(prompt, [pane], "independent").catch((error) => {
+      if (isAbortError(error)) {
+        return;
+      }
       setAnalysis(null);
       streamMockResponse(pane, prompt);
       completeTurnAfterMock();
@@ -268,16 +435,55 @@ export function App() {
     setHarnessModules((current) => ({ ...current, [id]: enabled }));
   }
 
+  function pauseExecution() {
+    activeStreamController.current?.abort();
+    activeStreamController.current = null;
+    clearTimers();
+    setPaneState((current) => {
+      const next = { ...current };
+      for (const pane of panes) {
+        next[pane] = {
+          ...next[pane],
+          streaming: false,
+          messages: next[pane].messages.map((message) =>
+            message.status === "streaming"
+              ? {
+                  ...message,
+                  status: "done",
+                  text: message.text || "已暫停。"
+                }
+              : message
+          )
+        };
+      }
+      return next;
+    });
+  }
+
   return (
     <main className="shell">
       <TopBar
         model={model}
         reasoningEffort={reasoningEffort}
         harnessModules={harnessModules}
+        historyOpen={historyOpen}
         onModelChange={setModel}
         onReasoningEffortChange={setReasoningEffort}
         onHarnessModuleChange={updateHarnessModule}
+        onNewConversation={startNewConversation}
+        onToggleHistory={() => {
+          setHistoryOpen((current) => !current);
+          refreshProjects();
+        }}
       />
+      {historyOpen ? (
+        <HistoryPanel
+          projects={projects}
+          activeProjectId={projectId}
+          loading={historyLoading}
+          onSelectProject={loadConversation}
+        />
+      ) : null}
       <section className="workspace" aria-label="HarnessDiff chat comparison">
         <ChatPane
           pane="NoHarness"
@@ -303,6 +509,7 @@ export function App() {
         harnessDraft={paneState.Harness.draft}
         attachments={attachments}
         disabled={running}
+        running={running}
         onModeChange={setInputMode}
         onIntegratedDraftChange={setIntegratedDraft}
         onPaneDraftChange={(pane, value) =>
@@ -312,6 +519,7 @@ export function App() {
         onRemoveAttachment={removeAttachment}
         onSubmitIntegrated={submitIntegrated}
         onSubmitPane={submitPane}
+        onPause={pauseExecution}
       />
     </main>
   );

@@ -118,6 +118,21 @@ class ProjectStore:
             else 0,
         )
 
+    def list_run_documents(self, project_id: str) -> list[RunDocument]:
+        runs: list[RunDocument] = []
+        for run_dir in self.list_run_dirs(project_id):
+            run_path = run_dir / "run.json"
+            if run_path.exists():
+                runs.append(RunDocument.model_validate(read_json(run_path)))
+        return runs
+
+    def read_pane_output_text(self, project_id: str, run_id: str, pane: str) -> str:
+        output_path = self._run_dir(project_id, run_id) / pane / "output.json"
+        if not output_path.exists():
+            return ""
+        data = read_json(output_path)
+        return str(data.get("text", ""))
+
     def write_run_analysis(self, project_id: str, run_id: str, analysis: dict[str, Any]) -> None:
         analysis_dir = self._run_dir(project_id, run_id) / "analysis"
         analysis_dir.mkdir(parents=True, exist_ok=True)

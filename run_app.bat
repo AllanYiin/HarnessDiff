@@ -51,16 +51,11 @@ if errorlevel 1 (
 
 echo [4/6] Starting backend or local app...
 echo Start time: %DATE% %TIME%
-start "Backend" cmd /k """%PYEXE%"" "scripts\start_backend.py" 1>>"logs\backend.log" 2>>&1"
+start "Backend" /d "%~dp0" "%~dp0scripts\launch_backend.bat"
 
 echo [5/6] Starting frontend (Node project)...
 echo [INFO] Frontend dir: apps\web
-set "FRONTEND_DIR=%~dp0apps\web"
-if not exist "%FRONTEND_DIR%\package.json" (
-  echo [WARN] Frontend package.json not found for path: apps\web
-) else (
-  start "Frontend" cmd /k "cd /d ""%FRONTEND_DIR%"" ^&^& corepack pnpm install 1>>""%~dp0logs\frontend.log"" 2>>&1 ^&^& corepack pnpm dev 1>>""%~dp0logs\frontend.log"" 2>>&1"
-)
+start "Frontend" /d "%~dp0" "%~dp0scripts\launch_frontend.bat"
 echo [6/6] Opening browser or app URLs...
 timeout /t 2 >nul
 start "" "http://127.0.0.1:8000"

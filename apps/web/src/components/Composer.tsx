@@ -1,4 +1,4 @@
-import { Image, Mic, Paperclip, Send } from "lucide-react";
+import { Image, Mic, Paperclip, Send, Square } from "lucide-react";
 
 import type { AttachmentPreview, InputMode, PaneId } from "../types";
 
@@ -9,6 +9,7 @@ type ComposerProps = {
   harnessDraft: string;
   attachments: AttachmentPreview[];
   disabled: boolean;
+  running: boolean;
   onModeChange: (mode: InputMode) => void;
   onIntegratedDraftChange: (value: string) => void;
   onPaneDraftChange: (pane: PaneId, value: string) => void;
@@ -16,6 +17,7 @@ type ComposerProps = {
   onRemoveAttachment: (id: string) => void;
   onSubmitIntegrated: () => void;
   onSubmitPane: (pane: PaneId) => void;
+  onPause: () => void;
 };
 
 export function Composer({
@@ -25,13 +27,15 @@ export function Composer({
   harnessDraft,
   attachments,
   disabled,
+  running,
   onModeChange,
   onIntegratedDraftChange,
   onPaneDraftChange,
   onAttach,
   onRemoveAttachment,
   onSubmitIntegrated,
-  onSubmitPane
+  onSubmitPane,
+  onPause
 }: ComposerProps) {
   return (
     <footer className="composer">
@@ -55,6 +59,12 @@ export function Composer({
           </button>
         </div>
         <div className="composerTools">
+          {running ? (
+            <button className="stopButton" type="button" onClick={onPause}>
+              <Square aria-hidden="true" size={14} />
+              暫停執行
+            </button>
+          ) : null}
           <label className="iconButton fileButton" aria-label="Attach file">
             <Paperclip aria-hidden="true" size={18} />
             <input type="file" multiple onChange={(event) => onAttach(event.target.files)} />
@@ -139,4 +149,3 @@ export function Composer({
     </footer>
   );
 }
-

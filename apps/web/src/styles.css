@@ -134,6 +134,104 @@ textarea:disabled {
   color: var(--color-text);
 }
 
+.textButton,
+.stopButton {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--color-text);
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.textButton.selected {
+  border-color: var(--color-action);
+  background: #eff6ff;
+  color: var(--color-action);
+}
+
+.stopButton {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: var(--color-danger);
+}
+
+.historyPanel {
+  position: fixed;
+  top: var(--topbar-height);
+  right: 16px;
+  z-index: 25;
+  width: min(360px, calc(100vw - 32px));
+  max-height: min(520px, calc(100vh - var(--topbar-height) - var(--composer-height) - 24px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-panel);
+  background: var(--color-surface);
+  box-shadow: 0 18px 44px rgb(15 23 42 / 0.16);
+  overflow: hidden;
+}
+
+.historyHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.historyHeader span,
+.historyItem time,
+.historyEmpty {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.historyList {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 1px;
+  padding: var(--space-2);
+}
+
+.historyItem {
+  width: 100%;
+  display: grid;
+  gap: 4px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-text);
+  padding: 10px;
+  text-align: left;
+}
+
+.historyItem:hover,
+.historyItem.selected {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.historyItem span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.historyEmpty {
+  padding: var(--space-4);
+  text-align: center;
+}
+
 .settingsMenu {
   position: absolute;
   top: calc(100% + 8px);
@@ -296,17 +394,115 @@ textarea:disabled {
   background: #f8fafc;
 }
 
+.messageHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: 6px;
+}
+
 .messageRole {
   display: block;
-  margin-bottom: 4px;
   color: var(--color-muted);
   font-size: 12px;
 }
 
-.message p {
-  margin: 0;
-  line-height: 1.55;
+.messageCopyButton {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-muted);
+}
+
+.messageCopyButton:hover,
+.messageCopyButton:focus-visible {
+  border-color: var(--color-border);
+  background: #ffffff;
+  color: var(--color-text);
+}
+
+.markdownContent {
+  display: grid;
+  gap: 8px;
+  line-height: 1.6;
   overflow-wrap: anywhere;
+}
+
+.markdownContent h3,
+.markdownContent h4,
+.markdownContent h5,
+.markdownContent p,
+.markdownContent ul,
+.markdownContent ol,
+.markdownContent blockquote,
+.markdownContent pre {
+  margin: 0;
+}
+
+.markdownContent h3 {
+  font-size: 17px;
+}
+
+.markdownContent h4 {
+  font-size: 15px;
+}
+
+.markdownContent h5 {
+  font-size: 14px;
+}
+
+.markdownContent ul,
+.markdownContent ol {
+  padding-left: 22px;
+}
+
+.markdownContent li + li {
+  margin-top: 4px;
+}
+
+.markdownContent blockquote {
+  border-left: 3px solid var(--color-border);
+  padding-left: 10px;
+  color: var(--color-muted);
+}
+
+.markdownContent code {
+  border-radius: 5px;
+  background: #e2e8f0;
+  padding: 1px 5px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.92em;
+}
+
+.markdownContent pre {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: #0f172a;
+  color: #f8fafc;
+  padding: 10px;
+}
+
+.markdownContent pre code {
+  display: block;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  white-space: pre;
+}
+
+.markdownContent a {
+  color: var(--color-action);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .analysisSummary {

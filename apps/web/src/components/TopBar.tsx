@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Settings, SplitSquareHorizontal } from "lucide-react";
+import { History, Plus, Settings, SplitSquareHorizontal } from "lucide-react";
 
 import type { HarnessModuleId, HarnessModules } from "../types";
 
@@ -19,18 +19,24 @@ type TopBarProps = {
   model: string;
   reasoningEffort: string;
   harnessModules: HarnessModules;
+  historyOpen: boolean;
   onModelChange: (value: string) => void;
   onReasoningEffortChange: (value: string) => void;
   onHarnessModuleChange: (id: HarnessModuleId, enabled: boolean) => void;
+  onNewConversation: () => void;
+  onToggleHistory: () => void;
 };
 
 export function TopBar({
   model,
   reasoningEffort,
   harnessModules,
+  historyOpen,
   onModelChange,
   onReasoningEffortChange,
-  onHarnessModuleChange
+  onHarnessModuleChange,
+  onNewConversation,
+  onToggleHistory
 }: TopBarProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -44,6 +50,19 @@ export function TopBar({
         </div>
       </div>
       <div className="topControls" aria-label="Model controls">
+        <button className="textButton" type="button" onClick={onNewConversation}>
+          <Plus aria-hidden="true" size={16} />
+          新對話
+        </button>
+        <button
+          className={`textButton ${historyOpen ? "selected" : ""}`}
+          type="button"
+          onClick={onToggleHistory}
+          aria-expanded={historyOpen}
+        >
+          <History aria-hidden="true" size={16} />
+          歷史
+        </button>
         <label>
           <span>模型</span>
           <select value={model} onChange={(event) => onModelChange(event.target.value)}>

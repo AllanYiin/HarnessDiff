@@ -4,6 +4,10 @@ import path from "node:path";
 const screenshotDir = path.resolve("test-results", "screenshots");
 
 test("renders HarnessDiff workbench and captures screenshot", async ({ page }, testInfo) => {
+  await page.route("**/api/**", async (route) => {
+    await route.abort();
+  });
+
   await page.goto("/");
 
   await expect(page).toHaveTitle("HarnessDiff");
@@ -104,6 +108,136 @@ test("renders analysis metrics from streamed API events", async ({ page }) => {
   await expect(page.getByText("NoHarness 42 / 100")).toBeVisible();
   await expect(page.getByText("Harness 50 / 120")).toBeVisible();
   await expect(page.getByText("Context 3/2")).toBeVisible();
+});
+
+test("renders assistant Markdown and copies raw Markdown source", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  const markdown = [
+    "## 回答",
+    "",
+    "這是**重點**與 `code`。",
+    "",
+    "- 第一點",
+    "- 第二點"
+  ].join("\n");
+
+  await page.route("**/api/projects", async (route) => {
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({ id: "proj_markdown" })
+    });
+  });
+  await page.route("**/api/projects/proj_markdown/runs", async (route) => {
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({ id: "run_markdown" })
+    });
+  });
+  await page.route("**/api/runs/run_markdown/stream", async (route) => {
+    const lines = [
+      { run_id: "run_markdown", pane: "NoHarness", type: "created", sequence: 0 },
+      { run_id: "run_markdown", pane: "NoHarness", type: "delta", text: markdown, sequence: 1 },
+      { run_id: "run_markdown", pane: "NoHarness", type: "completed", sequence: 2 },
+      { run_id: "run_markdown", pane: "Harness", type: "created", sequence: 0 },
+      { run_id: "run_markdown", pane: "Harness", type: "delta", text: markdown, sequence: 1 },
+      { run_id: "run_markdown", pane: "Harness", type: "completed", sequence: 2 },
+      { run_id: "run_markdown", type: "run_completed" }
+    ];
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: lines.map((line) => `data: ${JSON.stringify(line)}\n\n`).join("")
+    });
+  });
+
+  await page.goto("/");
+  await page.locator("textarea").first().fill("markdown please");
+  await page.getByRole("button", { name: "送出" }).click();
+
+  const assistantMessage = page.locator(".message.assistant").first();
+  await expect(assistantMessage.getByRole("heading", { name: "回答" })).toBeVisible();
+  await expect(assistantMessage.locator("strong", { hasText: "重點" })).toBeVisible();
+  await expect(assistantMessage.locator("code", { hasText: "code" })).toBeVisible();
+  await expect(assistantMessage.locator("li", { hasText: "第一點" })).toBeVisible();
+
+  await assistantMessage.getByRole("button", { name: "複製 Markdown 原始碼" }).click();
+  await expect
+    .poll(() => page.evaluate(() => navigator.clipboard.readText().then((text) => text.replace(/\r\n/g, "\n"))))
+    .toBe(markdown);
+});
+
+test("creates a named conversation and shows it in history", async ({ page }) => {
+  const projects: Array<{ id: string; name: string; created_at: string; updated_at: string }> = [];
+  let createdProjectName = "";
+  const now = "2026-05-23T00:00:00+00:00";
+
+  await page.route("**/api/projects", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ projects })
+      });
+      return;
+    }
+    const body = route.request().postDataJSON() as { name: string };
+    createdProjectName = body.name;
+    projects.unshift({ id: "proj_history", name: body.name, created_at: now, updated_at: now });
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify(projects[0])
+    });
+  });
+  await page.route("**/api/projects/proj_history/runs", async (route) => {
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({ id: "run_history" })
+    });
+  });
+  await page.route("**/api/runs/run_history/stream", async (route) => {
+    const lines = [
+      { run_id: "run_history", pane: "NoHarness", type: "created", sequence: 0 },
+      { run_id: "run_history", pane: "NoHarness", type: "delta", text: "baseline", sequence: 1 },
+      { run_id: "run_history", pane: "NoHarness", type: "completed", sequence: 2 },
+      { run_id: "run_history", pane: "Harness", type: "created", sequence: 0 },
+      { run_id: "run_history", pane: "Harness", type: "delta", text: "harness", sequence: 1 },
+      { run_id: "run_history", pane: "Harness", type: "completed", sequence: 2 },
+      { run_id: "run_history", type: "run_completed" }
+    ];
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: lines.map((line) => `data: ${JSON.stringify(line)}\n\n`).join("")
+    });
+  });
+
+  await page.goto("/");
+  await page.locator("textarea").first().fill("這是一段會自動命名的歷史對話");
+  await page.getByRole("button", { name: "送出" }).click();
+
+  await expect(page.getByText("baseline")).toBeVisible();
+  expect(createdProjectName).toBe("這是一段會自動命名的歷史對話");
+
+  await page.getByRole("button", { name: "歷史" }).click();
+  await expect(page.getByLabel("歷史對話紀錄")).toBeVisible();
+  await expect(page.getByRole("button", { name: /這是一段會自動命名的歷史對話/ })).toBeVisible();
+});
+
+test("pauses a running mock response", async ({ page }) => {
+  await page.route("**/api/projects", async (route) => {
+    await route.abort();
+  });
+
+  await page.goto("/");
+  await page.locator("textarea").first().fill("pause this response");
+  await page.getByRole("button", { name: "送出" }).click();
+  await expect(page.getByRole("button", { name: "暫停執行" })).toBeVisible();
+  await page.getByRole("button", { name: "暫停執行" }).click();
+  await expect(page.getByRole("button", { name: "暫停執行" })).toHaveCount(0);
 });
 
 const mockAnalysis = {

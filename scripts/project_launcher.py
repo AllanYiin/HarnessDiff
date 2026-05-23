@@ -1573,15 +1573,30 @@ def write_run_app_bat(root: Path, script_name: str, backend: dict,
                 )
     elif mode == "script":
         rel_script = det.backend.get("rel_script", "")
-        backend_start = f'start "Backend" cmd /k """%PYEXE%"" "{rel_script}" 1>>"logs\\backend.log" 2>>&1"\n'
+        backend_helper = root / "scripts" / "launch_backend.bat"
+        backend_helper_text = f"""@echo off
+setlocal
+set "PROJECT_ROOT=%~dp0.."
+pushd "%PROJECT_ROOT%"
+if not exist "logs" mkdir "logs" >nul 2>nul
+set "PYEXE=%PROJECT_ROOT%\\{venv_dir}\\Scripts\\python.exe"
+if not exist "%PYEXE%" set "PYEXE=python"
+"%PYEXE%" "%PROJECT_ROOT%\\{rel_script}" 1>>"%PROJECT_ROOT%\\logs\\backend.log" 2>>&1
+set "RC=%ERRORLEVEL%"
+if not "%RC%"=="0" echo [ERROR] Backend exited with code %RC%. See logs\\backend.log.
+popd
+exit /b %RC%
+"""
+        write_text_ascii(backend_helper, backend_helper_text)
+        backend_start = 'start "Backend" /d "%~dp0" "%~dp0scripts\\launch_backend.bat"\n'
         backend_url = f"http://{backend_host}:{backend_port}"
     elif mode == "uvicorn":
         target = det.backend.get("target", "")
-        backend_start = f'start "Backend" cmd /k """%PYEXE%"" -m uvicorn {target} --host {backend_host} --port {backend_port} --log-level info 1>>"logs\\backend.log" 2>>&1"\n'
+        backend_start = f'start "Backend" /d "%~dp0" cmd /k "call ""%PYEXE%"" -m uvicorn {target} --host {backend_host} --port {backend_port} --log-level info 1>>""%~dp0logs\\backend.log"" 2>>&1"\n'
         backend_url = f"http://{backend_host}:{backend_port}"
     elif mode == "streamlit":
         entry = det.backend.get("file", "")
-        backend_start = 'set "PYTHONPATH=%CD%\\src;%CD%;%PYTHONPATH%"\n' + f'start "Backend" cmd /k """%PYEXE%"" -m streamlit run "{entry}" 1>>"logs\\backend.log" 2>>&1"\n'
+        backend_start = 'set "PYTHONPATH=%CD%\\src;%CD%;%PYTHONPATH%"\n' + f'start "Backend" /d "%~dp0" cmd /k "call ""%PYEXE%"" -m streamlit run ""%~dp0{entry}"" 1>>""%~dp0logs\\backend.log"" 2>>&1"\n'
     elif mode == "node":
         backend_dir = det.backend.get("dir", ".")
         install_cmd = det.backend.get("install_cmd", "npm install")
@@ -1600,14 +1615,14 @@ def write_run_app_bat(root: Path, script_name: str, backend: dict,
     elif mode == "module":
         module_name = det.backend.get("module", "")
         py_path_fix = 'set "PYTHONPATH=%CD%\\src;%CD%;%PYTHONPATH%"\n' if needs_src_pythonpath_fix(root, module_name) else ""
-        backend_start = py_path_fix + f'start "Backend" cmd /k """%PYEXE%"" -m {module_name} 1>>"logs\\backend.log" 2>>&1"\n'
+        backend_start = py_path_fix + f'start "Backend" /d "%~dp0" cmd /k "call ""%PYEXE%"" -m {module_name} 1>>""%~dp0logs\\backend.log"" 2>>&1"\n'
     elif local_py.exists and local_py.entry:
         py_path = bat_pythonpath_prefix(root, local_py.import_root)
         if local_py.module_target:
-            backend_start = py_path + f'start "LocalPython" cmd /k """%PYEXE%"" -m {local_py.module_target} 1>>"logs\\local_python.log" 2>>&1"\n'
+            backend_start = py_path + f'start "LocalPython" /d "%~dp0" cmd /k "call ""%PYEXE%"" -m {local_py.module_target} 1>>""%~dp0logs\\local_python.log"" 2>>&1"\n'
         else:
             app_rel = norm_rel(root, local_py.entry).replace("/", "\\")
-            backend_start = py_path + f'start "LocalPython" cmd /k """%PYEXE%"" "{app_rel}" 1>>"logs\\local_python.log" 2>>&1"\n'
+            backend_start = py_path + f'start "LocalPython" /d "%~dp0" cmd /k "call ""%PYEXE%"" ""%~dp0{app_rel}"" 1>>""%~dp0logs\\local_python.log"" 2>>&1"\n'
     elif has_runnable_frontend:
         backend_start = "echo [4/6] Backend not detected. Skipping backend startup.\n"
     else:
@@ -1615,15 +1630,34 @@ def write_run_app_bat(root: Path, script_name: str, backend: dict,
 
     if det.frontend.exists:
         frontend_run_cmd = det.frontend.direct_cmd_for_bat or det.frontend.run_cmd
+        frontend_helper = root / "scripts" / "launch_frontend.bat"
+        frontend_helper_text = f"""@echo off
+setlocal
+set "PROJECT_ROOT=%~dp0.."
+set "FRONTEND_DIR=%PROJECT_ROOT%\\{det.frontend.dir}"
+if not exist "%PROJECT_ROOT%\\logs" mkdir "%PROJECT_ROOT%\\logs" >nul 2>nul
+if not exist "%FRONTEND_DIR%\\package.json" (
+  echo [ERROR] Frontend package.json not found: %FRONTEND_DIR% 1>>"%PROJECT_ROOT%\\logs\\frontend.log" 2>>&1
+  exit /b 1
+)
+pushd "%FRONTEND_DIR%"
+call {det.frontend.install_cmd} 1>>"%PROJECT_ROOT%\\logs\\frontend.log" 2>>&1
+if errorlevel 1 (
+  echo [ERROR] Frontend install failed. See logs\\frontend.log. 1>>"%PROJECT_ROOT%\\logs\\frontend.log" 2>>&1
+  popd
+  exit /b 1
+)
+call {frontend_run_cmd} 1>>"%PROJECT_ROOT%\\logs\\frontend.log" 2>>&1
+set "RC=%ERRORLEVEL%"
+if not "%RC%"=="0" echo [ERROR] Frontend exited with code %RC%. See logs\\frontend.log. 1>>"%PROJECT_ROOT%\\logs\\frontend.log" 2>>&1
+popd
+exit /b %RC%
+"""
+        write_text_ascii(frontend_helper, frontend_helper_text)
         frontend_start = (
             f'echo [5/6] Starting frontend (Node project)...\n'
             f'echo [INFO] Frontend dir: {det.frontend.dir}\n'
-            f'set "FRONTEND_DIR=%~dp0{det.frontend.dir}"\n'
-            'if not exist "%FRONTEND_DIR%\\package.json" (\n'
-            f'  echo [WARN] Frontend package.json not found for path: {det.frontend.dir}\n'
-            ') else (\n'
-            f'  start "Frontend" cmd /k "cd /d ""%FRONTEND_DIR%"" ^&^& {det.frontend.install_cmd} 1>>""%~dp0logs\\frontend.log"" 2>>&1 ^&^& {frontend_run_cmd} 1>>""%~dp0logs\\frontend.log"" 2>>&1"\n'
-            ')\n'
+            'start "Frontend" /d "%~dp0" "%~dp0scripts\\launch_frontend.bat"\n'
         )
         if det.frontend.port:
             frontend_url = f"http://{det.frontend.host or '127.0.0.1'}:{det.frontend.port}"

@@ -41,6 +41,26 @@ async def get_project(request: Request, project_id: str) -> ProjectDocument:
         ) from None
 
 
+@router.get("/{project_id}/transcript")
+async def get_project_transcript(request: Request, project_id: str) -> dict:
+    try:
+        store = get_store(request)
+        project = store.get_project(project_id)
+        runs = []
+        for run in store.list_run_documents(project_id):
+            panes = {}
+            for pane in run.target_panes:
+                panes[str(pane)] = {
+                    "output_text": store.read_pane_output_text(project_id, run.id, str(pane))
+                }
+            runs.append({**run.model_dump(mode="json"), "panes": panes})
+        return {"project": project.model_dump(mode="json"), "runs": runs}
+    except ProjectNotFoundError:
+        raise HTTPException(status_code=404, detail="Project not found") from None
+    except InvalidProjectIdError:
+        raise HTTPException(status_code=400, detail="Invalid project id") from None
+
+
 @router.patch("/{project_id}", response_model=ProjectDocument)
 async def update_project(
     request: Request, project_id: str, payload: ProjectUpdate
@@ -70,4 +90,3 @@ async def delete_project(request: Request, project_id: str) -> Response:
     except InvalidProjectIdError:
         raise HTTPException(status_code=400, detail="Invalid project id") from None
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-

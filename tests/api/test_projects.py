@@ -52,6 +52,35 @@ def test_invalid_project_id_is_rejected(tmp_path) -> None:
     assert response.status_code == 400
 
 
+def test_project_transcript_returns_runs_and_outputs(tmp_path) -> None:
+    client = TestClient(create_app(data_dir=tmp_path))
+    project_id = client.post("/api/projects", json={"name": "Transcript"}).json()["id"]
+    run = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "hello",
+            "input_mode": "integrated",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+            "target_panes": ["NoHarness"],
+        },
+    ).json()
+    run_dir = tmp_path / "projects" / project_id / "runs" / run["id"] / "NoHarness"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "output.json").write_text(
+        json.dumps({"pane": "NoHarness", "text": "answer"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    response = client.get(f"/api/projects/{project_id}/transcript")
+
+    assert response.status_code == 200
+    doc = response.json()
+    assert doc["project"]["id"] == project_id
+    assert doc["runs"][0]["prompt"] == "hello"
+    assert doc["runs"][0]["panes"]["NoHarness"]["output_text"] == "answer"
+
+
 def test_corrupt_project_writes_repair_report(tmp_path) -> None:
     client = TestClient(create_app(data_dir=tmp_path))
     create_response = client.post("/api/projects", json={"name": "Corrupt me"})

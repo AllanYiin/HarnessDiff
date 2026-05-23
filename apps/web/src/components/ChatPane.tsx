@@ -1,3 +1,6 @@
+import { Check, Copy } from "lucide-react";
+import { useState } from "react";
+import { MarkdownContent } from "./MarkdownContent";
 import type { Message, PaneId } from "../types";
 
 type ChatPaneProps = {
@@ -8,6 +11,27 @@ type ChatPaneProps = {
 
 export function ChatPane({ pane, messages, streaming }: ChatPaneProps) {
   const isHarness = pane === "Harness";
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+
+  async function copyMarkdown(message: Message) {
+    if (!message.text) return;
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(message.text);
+    } else {
+      const textarea = document.createElement("textarea");
+      textarea.value = message.text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+    }
+    setCopiedMessageId(message.id);
+    window.setTimeout(() => setCopiedMessageId((current) => (current === message.id ? null : current)), 1200);
+  }
+
   return (
     <section className={`chatPane ${isHarness ? "harnessPane" : "neutralPane"}`}>
       <header className="paneHeader">
@@ -28,8 +52,21 @@ export function ChatPane({ pane, messages, streaming }: ChatPaneProps) {
         ) : (
           messages.map((message) => (
             <article className={`message ${message.role}`} key={message.id}>
-              <span className="messageRole">{message.role === "user" ? "你" : pane}</span>
-              <p>{message.text}</p>
+              <header className="messageHeader">
+                <span className="messageRole">{message.role === "user" ? "你" : pane}</span>
+                {message.text ? (
+                  <button
+                    aria-label="複製 Markdown 原始碼"
+                    className="messageCopyButton"
+                    onClick={() => void copyMarkdown(message)}
+                    title="複製 Markdown 原始碼"
+                    type="button"
+                  >
+                    {copiedMessageId === message.id ? <Check size={14} /> : <Copy size={14} />}
+                  </button>
+                ) : null}
+              </header>
+              <MarkdownContent source={message.text} />
             </article>
           ))
         )}
@@ -37,4 +74,3 @@ export function ChatPane({ pane, messages, streaming }: ChatPaneProps) {
     </section>
   );
 }
-

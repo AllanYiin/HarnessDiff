@@ -79,6 +79,33 @@ Errors:
 - `404`: project not found
 - `409`: project storage is corrupt; response includes `repair_report`
 
+### `GET /projects/{project_id}/transcript`
+
+Returns a project plus ordered run records and saved pane outputs so the frontend can rebuild a conversation history view.
+
+Response shape:
+
+```json
+{
+  "project": {
+    "id": "proj_...",
+    "name": "Conversation title"
+  },
+  "runs": [
+    {
+      "id": "run_...",
+      "prompt": "User prompt",
+      "target_panes": ["NoHarness", "Harness"],
+      "status": "completed",
+      "panes": {
+        "NoHarness": { "output_text": "..." },
+        "Harness": { "output_text": "..." }
+      }
+    }
+  ]
+}
+```
+
 ### `PATCH /projects/{project_id}`
 
 Updates project metadata.
