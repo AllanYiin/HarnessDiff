@@ -10,6 +10,9 @@ class Settings:
     app_name: str = "HarnessDiff API"
     schema_version: str = "2026-05-22.1"
     data_dir: Path = Path(os.environ.get("HARNESSDIFF_DATA_DIR", "./data")).resolve()
+    harnessdiff_home: Path = Path(
+        os.environ.get("HARNESSDIFF_HOME", Path.home() / ".harnessdiff")
+    ).expanduser().resolve()
 
     @property
     def projects_dir(self) -> Path:
@@ -17,4 +20,3 @@ class Settings:
 
 
 settings = Settings()
-

@@ -61,7 +61,7 @@ LOCAL_NAME_BLOCKLIST = {
     "main", "server", "run_server",
     "models", "schemas", "routers", "routes",
     "project_launcher", "project_launcher_posix", "apsm_validate",
-    "tests", "test",
+    "tests", "test", "harnessable",
 }
 
 IMPORT_TO_PIP_MAP = {
@@ -180,6 +180,11 @@ def write_text_utf8(p: Path, text: str) -> None:
 def write_text_utf8_lf(p: Path, text: str) -> None:
     # For .sh/.command. Use LF newlines; most tooling handles it well on Unix-like systems.
     p.write_text(text, encoding="utf-8", errors="strict", newline="\n")
+
+WINDOWS_UTF8_ENV = """set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
+set "PYTHONLEGACYWINDOWSSTDIO="
+"""
 
 def write_json_utf8(path: Path, payload: Dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1576,7 +1581,7 @@ def write_run_app_bat(root: Path, script_name: str, backend: dict,
         backend_helper = root / "scripts" / "launch_backend.bat"
         backend_helper_text = f"""@echo off
 setlocal
-set "PROJECT_ROOT=%~dp0.."
+{WINDOWS_UTF8_ENV}set "PROJECT_ROOT=%~dp0.."
 pushd "%PROJECT_ROOT%"
 if not exist "logs" mkdir "logs" >nul 2>nul
 set "PYEXE=%PROJECT_ROOT%\\{venv_dir}\\Scripts\\python.exe"
@@ -1633,7 +1638,7 @@ exit /b %RC%
         frontend_helper = root / "scripts" / "launch_frontend.bat"
         frontend_helper_text = f"""@echo off
 setlocal
-set "PROJECT_ROOT=%~dp0.."
+{WINDOWS_UTF8_ENV}set "PROJECT_ROOT=%~dp0.."
 set "FRONTEND_DIR=%PROJECT_ROOT%\\{det.frontend.dir}"
 if not exist "%PROJECT_ROOT%\\logs" mkdir "%PROJECT_ROOT%\\logs" >nul 2>nul
 if not exist "%FRONTEND_DIR%\\package.json" (
@@ -1688,6 +1693,7 @@ exit /b %RC%
 
     bat_text = rf"""@echo off
 setlocal ENABLEDELAYEDEXPANSION
+{WINDOWS_UTF8_ENV}
 
 REM =========================================
 REM One-click install / run (stable)

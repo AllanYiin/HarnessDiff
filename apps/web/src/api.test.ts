@@ -1,13 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createProject, getProjectTranscript, listProjects } from "./api";
+import { createProject, createRun, getProjectTranscript, listProjects } from "./api";
 
 function mockJsonResponse(body: unknown, ok = true, status = 200) {
-  return {
+  const response = {
     ok,
     status,
     json: () => Promise.resolve(body),
+    text: () => Promise.resolve(typeof body === "string" ? body : JSON.stringify(body)),
     body: null
+  } as Response;
+  return {
+    ...response,
+    clone: () => response
   } as Response;
 }
 
@@ -31,7 +36,25 @@ describe("api response normalization", () => {
     });
   });
 
-  it("normalizes transcript panes and drops malformed runs", async () => {
+  it("surfaces backend error detail when creating a run fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(mockJsonResponse({ detail: "ToolAnything import failed" }, false, 500))
+    );
+
+    await expect(
+      createRun({
+        projectId: "proj_mock",
+        prompt: "hello",
+        inputMode: "integrated",
+        model: "fake-model",
+        reasoningEffort: "medium",
+        profiles: [{ id: "harness", label: "Harness", harness_modules: {} }]
+      })
+    ).rejects.toThrow("建立 run 失敗：HTTP 500 - ToolAnything import failed");
+  });
+
+  it("normalizes transcript profiles and drops malformed runs", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -41,13 +64,17 @@ describe("api response normalization", () => {
             {
               id: "run_1",
               prompt: "hello",
-              target_panes: ["NoHarness", "BadPane", "Harness"],
               input_mode: "independent",
               status: "completed",
-              panes: {
-                NoHarness: { output_text: "baseline" },
-                Harness: { output_text: "controlled" }
-              }
+              profiles: [
+                { id: "baseline", label: "NoHarness", harness_modules: {}, output_text: "baseline" },
+                {
+                  id: "controlled",
+                  label: "Controlled",
+                  harness_modules: { context_manifest: true, guardrails: true },
+                  output_text: "controlled"
+                }
+              ]
             },
             { id: "run_bad" }
           ]
@@ -60,11 +87,15 @@ describe("api response normalization", () => {
       runs: [
         {
           id: "run_1",
-          target_panes: ["NoHarness", "Harness"],
-          panes: {
-            NoHarness: { output_text: "baseline" },
-            Harness: { output_text: "controlled" }
-          }
+          profiles: [
+            { id: "baseline", label: "NoHarness", output_text: "baseline" },
+            {
+              id: "controlled",
+              label: "Controlled",
+              harness_modules: { context_summary: true, guardrails: true },
+              output_text: "controlled"
+            }
+          ]
         }
       ]
     });

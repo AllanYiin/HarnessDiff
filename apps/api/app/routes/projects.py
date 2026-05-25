@@ -48,12 +48,17 @@ async def get_project_transcript(request: Request, project_id: str) -> dict:
         project = store.get_project(project_id)
         runs = []
         for run in store.list_run_documents(project_id):
-            panes = {}
-            for pane in run.target_panes:
-                panes[str(pane)] = {
-                    "output_text": store.read_pane_output_text(project_id, run.id, str(pane))
-                }
-            runs.append({**run.model_dump(mode="json"), "panes": panes})
+            profiles = []
+            for profile in run.profiles:
+                profiles.append(
+                    {
+                        **profile.model_dump(mode="json"),
+                        "output_text": store.read_profile_output_text(
+                            project_id, run.id, profile.id
+                        ),
+                    }
+                )
+            runs.append({**run.model_dump(mode="json"), "profiles": profiles})
         return {"project": project.model_dump(mode="json"), "runs": runs}
     except ProjectNotFoundError:
         raise HTTPException(status_code=404, detail="Project not found") from None

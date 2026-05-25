@@ -6,7 +6,7 @@
   --color-muted: #64748b;
   --color-action: #2563eb;
   --color-harness: #0f766e;
-  --color-neutral-pane: #64748b;
+  --color-neutral-profile: #64748b;
   --color-warn: #d97706;
   --color-danger: #b91c1c;
   --radius-panel: 8px;
@@ -30,17 +30,28 @@
 }
 
 html,
-body {
+body,
+#root {
   margin: 0;
   width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+html,
+body {
   overflow-x: hidden;
 }
 
 .shell {
-  min-height: 100vh;
+  width: 100%;
+  height: 100dvh;
+  min-height: 0;
   display: grid;
   grid-template-rows: var(--topbar-height) minmax(0, 1fr) auto var(--composer-height);
   background: var(--color-bg);
+  overflow: hidden;
 }
 
 .topBar,
@@ -70,7 +81,7 @@ body {
 }
 
 .brand span,
-.paneHeader p,
+.profileHeader p,
 .analysisSummary span {
   color: var(--color-muted);
   font-size: 13px;
@@ -134,6 +145,12 @@ textarea:disabled {
   color: var(--color-text);
 }
 
+.activeIconButton {
+  border-color: var(--color-harness);
+  background: #ccfbf1;
+  color: var(--color-harness);
+}
+
 .textButton,
 .stopButton {
   min-height: 36px;
@@ -175,6 +192,121 @@ textarea:disabled {
   background: var(--color-surface);
   box-shadow: 0 18px 44px rgb(15 23 42 / 0.16);
   overflow: hidden;
+}
+
+.skillPanel {
+  position: fixed;
+  top: var(--topbar-height);
+  right: 16px;
+  z-index: 24;
+  width: min(520px, calc(100vw - 32px));
+  max-height: min(620px, calc(100vh - var(--topbar-height) - var(--composer-height) - 24px));
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-panel);
+  background: var(--color-surface);
+  box-shadow: 0 18px 44px rgb(15 23 42 / 0.16);
+  padding: var(--space-4);
+  overflow: hidden;
+}
+
+.skillPanelHeader,
+.skillActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.skillPanelHeader {
+  justify-content: space-between;
+}
+
+.skillPanelHeader div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.skillPanelHeader span,
+.panelMuted,
+.emptySkillState,
+.skillItem span {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.skillPanelHeader span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panelError {
+  margin: 0;
+  color: var(--color-danger);
+  font-size: 13px;
+}
+
+.skillList {
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+  overflow-y: auto;
+}
+
+.skillItem {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--color-text);
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.skillItem.selected {
+  border-color: var(--color-harness);
+  background: #f0fdfa;
+}
+
+.skillItem strong,
+.skillItem span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.emptySkillState {
+  min-height: 96px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+}
+
+.skillDetail {
+  min-height: 0;
+  display: grid;
+  gap: var(--space-2);
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-3);
+}
+
+.skillDetail pre {
+  max-height: 190px;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: var(--space-3);
+  font-size: 12px;
+  white-space: pre-wrap;
 }
 
 .historyHeader {
@@ -281,6 +413,7 @@ textarea:disabled {
 
 .composer {
   min-height: var(--composer-height);
+  position: relative;
   align-items: stretch;
   justify-content: center;
   flex-direction: column;
@@ -294,11 +427,13 @@ textarea:disabled {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: var(--space-4);
+  min-width: 0;
   min-height: 0;
+  overflow: hidden;
   padding: var(--space-4) var(--space-6);
 }
 
-.chatPane {
+.chatProfile {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
@@ -309,15 +444,15 @@ textarea:disabled {
   overflow: hidden;
 }
 
-.neutralPane {
-  border-top: 4px solid var(--color-neutral-pane);
+.neutralProfile {
+  border-top: 4px solid var(--color-neutral-profile);
 }
 
-.harnessPane {
+.controlledProfile {
   border-top: 4px solid var(--color-harness);
 }
 
-.paneHeader {
+.profileHeader {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -326,16 +461,16 @@ textarea:disabled {
   border-bottom: 1px solid var(--color-border);
 }
 
-.paneHeader h2 {
+.profileHeader h2 {
   margin: 0 0 4px;
   font-size: 18px;
 }
 
-.paneHeader p {
+.profileHeader p {
   margin: 0;
 }
 
-.paneStatus {
+.profileStatus {
   flex: 0 0 auto;
   border-radius: 999px;
   border: 1px solid var(--color-border);
@@ -344,7 +479,7 @@ textarea:disabled {
   font-size: 12px;
 }
 
-.paneStatus.active {
+.profileStatus.active {
   border-color: var(--color-action);
   color: var(--color-action);
   background: #eff6ff;
@@ -353,7 +488,9 @@ textarea:disabled {
 .messageList {
   min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
   padding: var(--space-4);
+  scrollbar-gutter: stable;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -394,6 +531,10 @@ textarea:disabled {
   background: #f8fafc;
 }
 
+.message.assistant:has(.toolCallStack) {
+  max-width: min(780px, 96%);
+}
+
 .messageHeader {
   display: flex;
   align-items: center;
@@ -428,6 +569,118 @@ textarea:disabled {
   color: var(--color-text);
 }
 
+.toolCallStack {
+  display: grid;
+  gap: 8px;
+  margin: 4px 0 10px;
+}
+
+.toolCallDisclosure {
+  border: 1px solid #cbd5e1;
+  border-left: 4px solid #0f766e;
+  border-radius: 7px;
+  background: #ffffff;
+  overflow: clip;
+}
+
+.toolCallDisclosure.subagentToolCall {
+  border-left-color: #7c3aed;
+  background: #faf5ff;
+}
+
+.toolCallDisclosure summary {
+  min-height: 36px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  color: var(--color-text);
+  list-style-position: outside;
+}
+
+.toolCallDisclosure summary:focus-visible {
+  outline: 2px solid var(--color-action);
+  outline-offset: -2px;
+}
+
+.toolCallIndex,
+.toolCallLatency {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.toolCallName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.toolCallBadge,
+.toolCallStatus {
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.toolCallBadge {
+  border: 1px solid #c4b5fd;
+  background: #ede9fe;
+  color: #5b21b6;
+}
+
+.toolCallStatus {
+  border: 1px solid #99f6e4;
+  background: #ccfbf1;
+  color: #115e59;
+}
+
+.toolCallStatus.failed {
+  border-color: #fecaca;
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.toolCallBody {
+  display: grid;
+  gap: 8px;
+  padding: 0 10px 10px 10px;
+}
+
+.toolCallBody section {
+  min-width: 0;
+}
+
+.toolCallBody h3 {
+  margin: 0 0 4px;
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.toolCallBody pre {
+  max-height: 220px;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+  padding: 8px;
+  color: #0f172a;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .markdownContent {
   display: grid;
   gap: 8px;
@@ -442,7 +695,8 @@ textarea:disabled {
 .markdownContent ul,
 .markdownContent ol,
 .markdownContent blockquote,
-.markdownContent pre {
+.markdownContent pre,
+.markdownTableScroller {
   margin: 0;
 }
 
@@ -497,6 +751,39 @@ textarea:disabled {
   color: inherit;
   padding: 0;
   white-space: pre;
+}
+
+.markdownTableScroller {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.markdownContent table {
+  width: 100%;
+  min-width: 420px;
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+
+.markdownContent th,
+.markdownContent td {
+  border-bottom: 1px solid var(--color-border);
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdownContent th {
+  background: #f1f5f9;
+  color: var(--color-text);
+  font-weight: 650;
+}
+
+.markdownContent tr:last-child td {
+  border-bottom: 0;
 }
 
 .markdownContent a {
@@ -597,6 +884,18 @@ textarea:disabled {
   padding: 0 var(--space-2);
 }
 
+.attachmentPreview small {
+  flex: 0 0 auto;
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.attachmentError {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: var(--color-danger);
+}
+
 .attachmentPreview img {
   width: 26px;
   height: 26px;
@@ -608,6 +907,57 @@ textarea:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.composerStatus {
+  width: 100%;
+  color: var(--color-danger);
+  font-size: 12px;
+}
+
+.skillCommandMenu {
+  position: absolute;
+  left: var(--space-6);
+  bottom: calc(var(--composer-height) - 18px);
+  z-index: 35;
+  width: min(420px, calc(100vw - 48px));
+  max-height: 240px;
+  display: grid;
+  gap: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 16px 40px rgb(15 23 42 / 0.16);
+  padding: var(--space-2);
+  overflow-y: auto;
+}
+
+.skillCommandMenu button {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text);
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.skillCommandMenu button.selected,
+.skillCommandMenu button:hover {
+  background: #f0fdfa;
+}
+
+.skillCommandMenu strong,
+.skillCommandMenu span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.skillCommandMenu span {
+  color: var(--color-muted);
+  font-size: 12px;
 }
 
 .inputRow,
@@ -659,7 +1009,7 @@ select:focus {
 }
 
 .secondarySend {
-  background: var(--color-neutral-pane);
+  background: var(--color-neutral-profile);
 }
 
 .harnessSend {
@@ -715,6 +1065,12 @@ select:focus {
     padding-inline: var(--space-3);
   }
 
+  .skillCommandMenu {
+    left: var(--space-3);
+    right: var(--space-3);
+    width: auto;
+  }
+
   .composerHeader {
     min-width: 0;
     align-items: flex-start;
@@ -736,6 +1092,18 @@ select:focus {
     flex-wrap: wrap;
   }
 
+  .skillPanel {
+    left: var(--space-3);
+    right: var(--space-3);
+    width: auto;
+  }
+
+  .skillPanelHeader,
+  .skillActions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .toggleGrid {
     grid-template-columns: 1fr;
   }
@@ -747,6 +1115,16 @@ select:focus {
   .inputRow {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .toolCallDisclosure summary {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .toolCallBadge,
+  .toolCallLatency {
+    grid-column: 2 / -1;
+    justify-self: start;
   }
 
   .sendButton {

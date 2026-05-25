@@ -51,7 +51,7 @@ Do not print or commit the key.
 
 Escalation: if the key is present but the API still fails, inspect the provider error in `{pane}/events.jsonl` and retry a minimal live smoke before changing application code.
 
-## Frontend Falls Back To Mock Streaming
+## Frontend Cannot Reach Backend
 
 Symptoms: Playwright or Vite logs:
 
@@ -62,9 +62,9 @@ Error: connect ECONNREFUSED 127.0.0.1:8000
 
 Diagnosis: the frontend is running without the FastAPI backend.
 
-Expected behavior: the UI catches the API failure and falls back to mock streaming. This is intentional for UI smoke tests.
+Expected behavior: the UI surfaces the backend failure. Product code and e2e tests must not replace the response with mock streaming, because that hides missing backend/API contracts.
 
-Remediation for live API testing: start the backend on port 8000.
+Remediation: start the backend on port 8000.
 
 Verify: submit a prompt and confirm the run creates local JSON artifacts under `data/projects`.
 

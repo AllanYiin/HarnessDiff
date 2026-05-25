@@ -10,8 +10,9 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from app.core.settings import settings
+from app.models.harness_modules import normalize_harness_modules
 from app.models.project import ProjectCreate, ProjectDocument, ProjectUpdate, utc_now_iso
-from app.models.run import RunCreate, RunDocument, RunStatus, new_run_document
+from app.models.run import ProfileConfig, RunCreate, RunDocument, RunStatus, new_run_document
 from app.providers.base import ProviderEvent
 from app.storage.errors import InvalidProjectIdError, ProjectNotFoundError, StorageCorruptionError
 from app.storage.json_io import read_json, write_json_atomic
@@ -85,14 +86,14 @@ class ProjectStore:
         self._read_project_document(project_id)
         runs_dir = self._project_dir(project_id) / "runs"
         runs_dir.mkdir(parents=True, exist_ok=True)
-        harness_modules = self._effective_harness_modules(project_id, payload.harness_modules)
+        profiles = self._effective_profiles(project_id, payload)
         run = new_run_document(
             schema_version=settings.schema_version,
             run_id=self._new_run_id(runs_dir),
             project_id=project_id,
             turn_index=self._next_turn_index(runs_dir),
             payload=payload,
-            harness_modules=harness_modules,
+            profiles=profiles,
         )
         run_dir = runs_dir / run.id
         run_dir.mkdir(parents=True, exist_ok=False)
@@ -126,12 +127,38 @@ class ProjectStore:
                 runs.append(RunDocument.model_validate(read_json(run_path)))
         return runs
 
-    def read_pane_output_text(self, project_id: str, run_id: str, pane: str) -> str:
-        output_path = self._run_dir(project_id, run_id) / pane / "output.json"
+    def read_profile_output_text(self, project_id: str, run_id: str, profile_id: str) -> str:
+        output_path = self._run_dir(project_id, run_id) / profile_id / "output.json"
         if not output_path.exists():
             return ""
         data = read_json(output_path)
         return str(data.get("text", ""))
+
+    def read_profile_conversation_messages(
+        self, project_id: str, profile_id: str, before_turn_index: int, max_turns: int = 8
+    ) -> tuple[dict[str, str], ...]:
+        messages: list[dict[str, str]] = []
+        prior_runs = []
+        for run_dir in self.list_run_dirs(project_id):
+            run_path = run_dir / "run.json"
+            if not run_path.exists():
+                continue
+            run_doc = RunDocument.model_validate(read_json(run_path))
+            if run_doc.turn_index >= before_turn_index or run_doc.status != RunStatus.completed:
+                continue
+            prior_runs.append((run_doc.turn_index, run_doc, run_dir))
+
+        for _, run_doc, run_dir in sorted(prior_runs, key=lambda item: item[0])[-max_turns:]:
+            output_path = run_dir / profile_id / "output.json"
+            if not output_path.exists():
+                continue
+            output = read_json(output_path)
+            output_text = str(output.get("text", "")).strip()
+            if not output_text:
+                continue
+            messages.append({"role": "user", "content": run_doc.prompt})
+            messages.append({"role": "assistant", "content": output_text})
+        return tuple(messages)
 
     def write_run_analysis(self, project_id: str, run_id: str, analysis: dict[str, Any]) -> None:
         analysis_dir = self._run_dir(project_id, run_id) / "analysis"
@@ -152,61 +179,90 @@ class ProjectStore:
         write_json_atomic(run_dir / "run.json", updated.model_dump(mode="json"))
         return updated
 
-    def prepare_pane_run(
+    def prepare_profile_run(
         self,
         project_id: str,
         run_id: str,
-        pane: str,
+        profile_id: str,
+        profile_label: str,
         prompt: str,
         instructions: str,
         harness_modules: dict[str, bool],
+        conversation_messages: tuple[dict[str, str], ...] = (),
+        tool_names: tuple[str, ...] = (),
     ) -> None:
-        pane_dir = self._run_dir(project_id, run_id) / pane
-        pane_dir.mkdir(parents=True, exist_ok=True)
+        profile_dir = self._run_dir(project_id, run_id) / profile_id
+        profile_dir.mkdir(parents=True, exist_ok=True)
         write_json_atomic(
-            pane_dir / "input.json",
+            profile_dir / "input.json",
             {
                 "schema_version": settings.schema_version,
-                "pane": pane,
+                "profile_id": profile_id,
+                "profile_label": profile_label,
                 "prompt": prompt,
                 "instructions": instructions,
-                "harness_modules": harness_modules if pane == "Harness" else {},
+                "harness_modules": harness_modules,
+                "conversation_messages": list(conversation_messages),
+                "tool_names": list(tool_names),
                 "created_at": utc_now_iso(),
             },
         )
-        output_path = pane_dir / "output.json"
+        output_path = profile_dir / "output.json"
         if not output_path.exists():
             write_json_atomic(
                 output_path,
                 {
                     "schema_version": settings.schema_version,
-                    "pane": pane,
+                    "profile_id": profile_id,
+                    "profile_label": profile_label,
                     "text": "",
                     "updated_at": utc_now_iso(),
                 },
             )
 
-    def append_pane_event(
-        self, project_id: str, run_id: str, pane: str, event: ProviderEvent
+    def append_profile_event(
+        self, project_id: str, run_id: str, profile_id: str, event: ProviderEvent
     ) -> None:
         event_payload = {
             "schema_version": settings.schema_version,
             "type": event.type,
-            "pane": event.pane,
+            "profile_id": event.profile_id,
+            "profile_label": event.profile_label,
             "sequence": event.sequence,
             "text": event.text,
+            "message": event.message,
+            "subagent_id": event.subagent_id,
+            "subagent_label": event.subagent_label,
+            "parent_profile_id": event.parent_profile_id,
             "response_id": event.response_id,
             "usage": event.usage,
             "raw": event.raw,
             "created_at": utc_now_iso(),
         }
-        self._append_jsonl(self._run_dir(project_id, run_id) / pane / "events.jsonl", event_payload)
+        self._append_jsonl(
+            self._run_dir(project_id, run_id) / profile_id / "events.jsonl", event_payload
+        )
 
-    def append_error_event(
-        self, project_id: str, run_id: str, pane: str, error_payload: dict[str, Any]
+    def append_harness_decision_event(
+        self, project_id: str, run_id: str, profile_id: str, sequence: int, decision: dict[str, Any]
     ) -> None:
         self._append_jsonl(
-            self._run_dir(project_id, run_id) / pane / "events.jsonl",
+            self._run_dir(project_id, run_id) / profile_id / "events.jsonl",
+            {
+                "schema_version": settings.schema_version,
+                "type": "harness_decision",
+                "profile_id": profile_id,
+                "sequence": sequence,
+                "harness_decision": decision,
+                "created_at": utc_now_iso(),
+            },
+        )
+
+    def append_error_event(
+        self, project_id: str, run_id: str, profile_id: str, error_payload: dict[str, Any]
+    ) -> None:
+        self._append_jsonl(
+            self._run_dir(project_id, run_id) / profile_id / "events.jsonl",
             {
                 "schema_version": settings.schema_version,
                 **error_payload,
@@ -214,21 +270,149 @@ class ProjectStore:
             },
         )
 
-    def append_pane_output_delta(self, project_id: str, run_id: str, pane: str, text: str) -> None:
-        output_path = self._run_dir(project_id, run_id) / pane / "output.json"
+    def prepare_subagent_run(
+        self,
+        project_id: str,
+        run_id: str,
+        profile_id: str,
+        profile_label: str,
+        subagent_id: str,
+        subagent_label: str,
+        prompt: str,
+        instructions: str,
+        model: str,
+        reasoning_effort: str,
+    ) -> None:
+        subagent_dir = self._subagent_dir(project_id, run_id, profile_id, subagent_id)
+        subagent_dir.mkdir(parents=True, exist_ok=True)
+        write_json_atomic(
+            subagent_dir / "input.json",
+            {
+                "schema_version": settings.schema_version,
+                "profile_id": profile_id,
+                "profile_label": profile_label,
+                "subagent_id": subagent_id,
+                "subagent_label": subagent_label,
+                "parent_profile_id": profile_id,
+                "prompt": prompt,
+                "instructions": instructions,
+                "model": model,
+                "reasoning_effort": reasoning_effort,
+                "tool_names": [],
+                "created_at": utc_now_iso(),
+            },
+        )
+        output_path = subagent_dir / "output.json"
+        if not output_path.exists():
+            write_json_atomic(
+                output_path,
+                {
+                    "schema_version": settings.schema_version,
+                    "profile_id": profile_id,
+                    "profile_label": profile_label,
+                    "subagent_id": subagent_id,
+                    "subagent_label": subagent_label,
+                    "parent_profile_id": profile_id,
+                    "text": "",
+                    "updated_at": utc_now_iso(),
+                },
+            )
+
+    def append_subagent_event(
+        self,
+        project_id: str,
+        run_id: str,
+        profile_id: str,
+        subagent_id: str,
+        event: ProviderEvent,
+    ) -> None:
+        self._append_jsonl(
+            self._subagent_dir(project_id, run_id, profile_id, subagent_id) / "events.jsonl",
+            {
+                "schema_version": settings.schema_version,
+                "type": event.type,
+                "profile_id": event.profile_id,
+                "profile_label": event.profile_label,
+                "sequence": event.sequence,
+                "text": event.text,
+                "message": event.message,
+                "subagent_id": event.subagent_id or subagent_id,
+                "subagent_label": event.subagent_label,
+                "parent_profile_id": event.parent_profile_id or profile_id,
+                "response_id": event.response_id,
+                "usage": event.usage,
+                "raw": event.raw,
+                "created_at": utc_now_iso(),
+            },
+        )
+
+    def append_subagent_error_event(
+        self,
+        project_id: str,
+        run_id: str,
+        profile_id: str,
+        subagent_id: str,
+        error_payload: dict[str, Any],
+    ) -> None:
+        self._append_jsonl(
+            self._subagent_dir(project_id, run_id, profile_id, subagent_id) / "events.jsonl",
+            {
+                "schema_version": settings.schema_version,
+                **error_payload,
+                "created_at": utc_now_iso(),
+            },
+        )
+
+    def append_subagent_output_delta(
+        self, project_id: str, run_id: str, profile_id: str, subagent_id: str, text: str
+    ) -> None:
+        output_path = (
+            self._subagent_dir(project_id, run_id, profile_id, subagent_id) / "output.json"
+        )
         output = read_json(output_path)
         output["text"] = f"{output.get('text', '')}{text}"
         output["updated_at"] = utc_now_iso()
         write_json_atomic(output_path, output)
 
-    def write_pane_usage(
-        self, project_id: str, run_id: str, pane: str, usage: dict[str, Any]
+    def write_subagent_usage(
+        self,
+        project_id: str,
+        run_id: str,
+        profile_id: str,
+        subagent_id: str,
+        subagent_label: str,
+        usage: dict[str, Any],
     ) -> None:
         write_json_atomic(
-            self._run_dir(project_id, run_id) / pane / "usage.json",
+            self._subagent_dir(project_id, run_id, profile_id, subagent_id) / "usage.json",
             {
                 "schema_version": settings.schema_version,
-                "pane": pane,
+                "profile_id": profile_id,
+                "subagent_id": subagent_id,
+                "subagent_label": subagent_label,
+                "usage": usage,
+                "created_at": utc_now_iso(),
+            },
+        )
+
+    def append_profile_output_delta(
+        self, project_id: str, run_id: str, profile_id: str, text: str
+    ) -> None:
+        output_path = self._run_dir(project_id, run_id) / profile_id / "output.json"
+        output = read_json(output_path)
+        output["text"] = f"{output.get('text', '')}{text}"
+        output["updated_at"] = utc_now_iso()
+        write_json_atomic(output_path, output)
+
+    def write_profile_usage(
+        self, project_id: str, run_id: str, profile_id: str, profile_label: str, usage: dict[str, Any]
+    ) -> None:
+        write_json_atomic(
+            self._run_dir(project_id, run_id) / profile_id / "usage.json",
+            {
+                "schema_version": settings.schema_version,
+                "profile_id": profile_id,
+                "profile_label": profile_label,
                 "usage": usage,
                 "created_at": utc_now_iso(),
             },
@@ -293,6 +477,19 @@ class ProjectStore:
             raise ProjectNotFoundError(run_id)
         return run_dir
 
+    def _subagent_dir(
+        self, project_id: str, run_id: str, profile_id: str, subagent_id: str
+    ) -> Path:
+        if not PROJECT_ID_RE.match(profile_id) or not PROJECT_ID_RE.match(subagent_id):
+            raise InvalidProjectIdError(f"{profile_id}/{subagent_id}")
+        run_dir = self._run_dir(project_id, run_id)
+        subagent_dir = (run_dir / profile_id / "subagents" / subagent_id).resolve()
+        try:
+            subagent_dir.relative_to(run_dir)
+        except ValueError:
+            raise InvalidProjectIdError(f"{profile_id}/{subagent_id}") from None
+        return subagent_dir
+
     def _find_run_path(self, run_id: str) -> Path:
         if not PROJECT_ID_RE.match(run_id):
             raise InvalidProjectIdError(run_id)
@@ -327,7 +524,7 @@ class ProjectStore:
             "schema_version": schema_version,
             "profile": "harness.default",
             "modules": {
-                "context_manifest": {"enabled": True},
+                "context_summary": {"enabled": True},
                 "source_map": {"enabled": True},
                 "guardrails": {"enabled": True},
                 "output_contract": {"enabled": True},
@@ -354,4 +551,7 @@ class ProjectStore:
         }
         if overrides:
             modules.update({name: bool(enabled) for name, enabled in overrides.items()})
-        return modules
+        return normalize_harness_modules(modules)
+
+    def _effective_profiles(self, project_id: str, payload: RunCreate) -> list[ProfileConfig]:
+        return list(payload.profiles)

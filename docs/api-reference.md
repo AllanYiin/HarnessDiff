@@ -33,6 +33,24 @@ Common body parameters:
 
 Returns backend health.
 
+The response includes a `tools` object so local runs can confirm whether HarnessDiff
+started with the ToolAnything runtime loaded:
+
+```json
+{
+  "status": "ok",
+  "app": "HarnessDiff API",
+  "schema_version": "2026-05-22.1",
+  "data_dir": "D:\\PycharmProjects\\HarnessDiff\\github_repo\\data",
+  "harnessdiff_home": "C:\\Users\\you\\.harnessdiff",
+  "tools": {
+    "enabled": true,
+    "count": 15,
+    "names": ["standard.web.search", "standard.shell.bash", "harness.subagent.run", "multi_tool_use.parallel"]
+  }
+}
+```
+
 Expected response:
 
 ```json
@@ -40,6 +58,46 @@ Expected response:
   "status": "ok"
 }
 ```
+
+## Skills
+
+### `GET /skills`
+
+Ensures the HarnessDiff home exists, then returns installed skill summaries.
+
+Response:
+
+```json
+{
+  "home_dir": "C:\\Users\\you\\.harnessdiff",
+  "skills_dir": "C:\\Users\\you\\.harnessdiff\\skills",
+  "skills": [
+    {
+      "id": "demo-skill",
+      "name": "demo-skill",
+      "description": "Demo skill description",
+      "version": "1.0",
+      "path": "C:\\Users\\you\\.harnessdiff\\skills\\demo-skill"
+    }
+  ]
+}
+```
+
+### `GET /skills/{skill_id}`
+
+Returns the full `SKILL.md` content for one installed skill. The chat context uses only the first-layer summary unless the user explicitly drills into the skill.
+
+### `POST /skills/import`
+
+Imports a skill into `~/.harnessdiff/skills`.
+
+Supported `mode` values:
+
+- `zip`: `filename` plus `data_base64` for a zip archive containing `SKILL.md`
+- `skill`: `filename` plus `data_base64` for a single `.skill` or Markdown skill file saved as `SKILL.md`
+- `folder`: `filename` plus `files`, where each item has `relative_path` and `data_base64`
+
+Zip and folder imports reject absolute paths, empty path parts, and `..` path traversal.
 
 ## Projects
 
@@ -132,7 +190,7 @@ Request:
   "reasoning_effort": "medium",
   "target_panes": ["NoHarness", "Harness"],
   "harness_modules": {
-    "context_manifest": true,
+    "context_summary": true,
     "source_map": true,
     "guardrails": true,
     "output_contract": true,
@@ -151,6 +209,7 @@ Important fields:
 - `input_mode`: `integrated` or `independent`
 - `target_panes`: one or both of `NoHarness`, `Harness`
 - `harness_modules`: optional per-run overrides; merged with `config/harness.default.json`
+  - Legacy payloads using `context_manifest` are accepted and normalized to `context_summary`.
 
 Success: `201 Created`
 
@@ -199,7 +258,9 @@ Analysis includes:
 
 - current-turn usage
 - cumulative usage
+- per-subagent usage and caller-level subagent usage rollups when `harness.subagent.run` is called
 - context section structure
+- tool definition context for profiles where tools were sent
 - Harness vs NoHarness token deltas
 - notes about estimated section tokens
 
@@ -220,6 +281,17 @@ runs/{run_id}/{pane}/events.jsonl
 runs/{run_id}/{pane}/output.json
 runs/{run_id}/{pane}/usage.json
 runs/{run_id}/analysis/analysis.json
+```
+
+Profiles write `tool_names` to `input.json` when tools are available, and successful or failed tool calls are preserved as `tool_call` rows in `events.jsonl`. Harness chat profiles with `tool_policy` enabled include `standard.shell.bash`, `harness.subagent.run`, and `multi_tool_use.parallel`; NoHarness profiles omit those three while retaining standard web/fs/data tools. `harness.subagent.run` accepts `subagent_id`, `task`, and `context`, then returns the subagent result as a normal function tool output.
+
+Subagent tool calls additionally write:
+
+```text
+runs/{run_id}/{profile_id}/subagents/{subagent_id}/input.json
+runs/{run_id}/{profile_id}/subagents/{subagent_id}/events.jsonl
+runs/{run_id}/{profile_id}/subagents/{subagent_id}/output.json
+runs/{run_id}/{profile_id}/subagents/{subagent_id}/usage.json
 ```
 
 Failed runs write run and pane error artifacts but skip `analysis/analysis.json`.

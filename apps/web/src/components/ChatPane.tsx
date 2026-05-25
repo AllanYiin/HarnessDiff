@@ -1,16 +1,17 @@
 import { Check, Copy } from "lucide-react";
 import { useState } from "react";
 import { MarkdownContent } from "./MarkdownContent";
-import type { Message, PaneId } from "../types";
+import { ToolCallDisclosure } from "./ToolCallDisclosure";
+import type { Message, ProfileInstance } from "../types";
 
 type ChatPaneProps = {
-  pane: PaneId;
+  profile: ProfileInstance;
   messages: Message[];
   streaming: boolean;
 };
 
-export function ChatPane({ pane, messages, streaming }: ChatPaneProps) {
-  const isHarness = pane === "Harness";
+export function ChatPane({ profile, messages, streaming }: ChatPaneProps) {
+  const hasControls = Object.values(profile.harness_modules).some(Boolean);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
 
   async function copyMarkdown(message: Message) {
@@ -33,27 +34,27 @@ export function ChatPane({ pane, messages, streaming }: ChatPaneProps) {
   }
 
   return (
-    <section className={`chatPane ${isHarness ? "harnessPane" : "neutralPane"}`}>
-      <header className="paneHeader">
+    <section className={`chatProfile ${hasControls ? "controlledProfile" : "neutralProfile"}`}>
+      <header className="profileHeader">
         <div>
-          <h2>{pane}</h2>
-          <p>{isHarness ? "加入可開關的 Harness 控制" : "保留原始對話路徑"}</p>
+          <h2>{profile.label}</h2>
+          <p>{hasControls ? "使用 profile-level Harness 控制" : "直接 profile path"}</p>
         </div>
-        <span className={`paneStatus ${streaming ? "active" : ""}`}>
+        <span className={`profileStatus ${streaming ? "active" : ""}`}>
           {streaming ? "產生中" : "待命"}
         </span>
       </header>
-      <div className="messageList" aria-live="polite">
+      <div className="messageList" aria-label={`${profile.label} 對話內容`} aria-live="polite" tabIndex={0}>
         {messages.length === 0 ? (
           <div className="emptyState">
-            <strong>{isHarness ? "等待同題比較" : "尚無對話"}</strong>
-            <span>{isHarness ? "送出後會顯示加上控制後的回答。" : "第一回合會與右側同時開始。"}</span>
+            <strong>尚無對話</strong>
+            <span>送出後會顯示此 profile 的回答。</span>
           </div>
         ) : (
           messages.map((message) => (
             <article className={`message ${message.role}`} key={message.id}>
               <header className="messageHeader">
-                <span className="messageRole">{message.role === "user" ? "你" : pane}</span>
+                <span className="messageRole">{message.role === "user" ? "你" : profile.label}</span>
                 {message.text ? (
                   <button
                     aria-label="複製 Markdown 原始碼"
@@ -66,6 +67,13 @@ export function ChatPane({ pane, messages, streaming }: ChatPaneProps) {
                   </button>
                 ) : null}
               </header>
+              {message.toolCalls?.length ? (
+                <div className="toolCallStack" aria-label="工具呼叫紀錄">
+                  {message.toolCalls.map((toolCall, index) => (
+                    <ToolCallDisclosure index={index} key={toolCall.id} toolCall={toolCall} />
+                  ))}
+                </div>
+              ) : null}
               <MarkdownContent source={message.text} />
             </article>
           ))

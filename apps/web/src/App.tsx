@@ -4,36 +4,43 @@ import { AnalysisSummary } from "./components/AnalysisSummary";
 import { ChatPane } from "./components/ChatPane";
 import { Composer } from "./components/Composer";
 import { HistoryPanel } from "./components/HistoryPanel";
+import { SkillPanel } from "./components/SkillPanel";
 import { TopBar } from "./components/TopBar";
 import {
   createProject,
   createRun,
   getProjectTranscript,
-  getRunAnalysis,
+  getSkill,
+  importSkillFile,
+  importSkillFolder,
+  listSkills,
   listProjects,
   streamRun,
   updateProjectName,
   type AnalysisDocument,
   type ProjectSummary,
-  type RunStreamEvent
+  type RunStreamEvent,
+  type SkillSummary
 } from "./api";
+import { attachmentPromptBlock, ingestFiles } from "./domain/fileIngestion";
 import { nextInputModeAfterCompletedTurn } from "./domain/inputMode";
+import { parseSkillCommandIds, skillDetailsPromptBlock } from "./domain/skillCommands";
 import type {
   AttachmentPreview,
   HarnessModuleId,
   HarnessModules,
   InputMode,
   Message,
-  PaneId,
-  PaneState
+  ProfileId,
+  ProfileInstance,
+  ProfileState
 } from "./types";
 
-const panes: PaneId[] = ["NoHarness", "Harness"];
 const newConversationName = "新對話";
 const activeProjectStorageKey = "harnessdiff.activeProjectId";
 
 const defaultHarnessModules: HarnessModules = {
-  context_manifest: true,
+  context_summary: true,
   source_map: true,
   guardrails: true,
   output_contract: true,
@@ -44,12 +51,10 @@ const defaultHarnessModules: HarnessModules = {
   token_budgeter: true
 };
 
-function createAssistantText(pane: PaneId, prompt: string) {
-  if (pane === "Harness") {
-    return `我會先保留任務目標、限制與可驗證點，再回答：「${prompt}」。這一側會在後續階段加入 Context Manifest、Guardrails 與 Output Contract。`;
-  }
-  return `收到：「${prompt}」。這一側保留直接對話路徑，不額外加入 Harness 控制。`;
-}
+const defaultProfiles: ProfileInstance[] = [
+  { id: "baseline", label: "NoHarness", harness_modules: {} },
+  { id: "harness", label: "Harness", harness_modules: defaultHarnessModules }
+];
 
 function createMessage(role: Message["role"], text: string, status: Message["status"] = "done") {
   return {
@@ -60,17 +65,16 @@ function createMessage(role: Message["role"], text: string, status: Message["sta
   };
 }
 
-const initialPaneState: PaneState = {
+const initialProfileState: ProfileState = {
   messages: [],
   draft: "",
   streaming: false
 };
 
-function createInitialPaneState(): Record<PaneId, PaneState> {
-  return {
-    NoHarness: { ...initialPaneState, messages: [] },
-    Harness: { ...initialPaneState, messages: [] }
-  };
+function createInitialProfileState(profiles: ProfileInstance[]): Record<ProfileId, ProfileState> {
+  return Object.fromEntries(
+    profiles.map((profile) => [profile.id, { ...initialProfileState, messages: [] }])
+  );
 }
 
 function titleFromPrompt(prompt: string) {
@@ -80,6 +84,10 @@ function titleFromPrompt(prompt: string) {
 
 function isAbortError(error: unknown) {
   return error instanceof DOMException && error.name === "AbortError";
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error || "未知錯誤");
 }
 
 export function App() {
@@ -92,23 +100,56 @@ export function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [harnessModules, setHarnessModules] = useState<HarnessModules>(defaultHarnessModules);
+  const [skillsOpen, setSkillsOpen] = useState(false);
+  const [skillsHomeDir, setSkillsHomeDir] = useState("");
+  const [skillsDir, setSkillsDir] = useState("");
+  const [skills, setSkills] = useState<SkillSummary[]>([]);
+  const [skillsLoading, setSkillsLoading] = useState(false);
+  const [skillImporting, setSkillImporting] = useState(false);
+  const [skillError, setSkillError] = useState("");
+  const [selectedSkillId, setSelectedSkillId] = useState("");
+  const [selectedSkillContent, setSelectedSkillContent] = useState("");
+  const [profiles, setProfiles] = useState<ProfileInstance[]>(defaultProfiles);
   const [analysis, setAnalysis] = useState<AnalysisDocument | null>(null);
   const [integratedDraft, setIntegratedDraft] = useState("");
   const [attachments, setAttachments] = useState<AttachmentPreview[]>([]);
-  const [paneState, setPaneState] = useState<Record<PaneId, PaneState>>(createInitialPaneState);
-  const timers = useRef<number[]>([]);
-  const activeStreamController = useRef<AbortController | null>(null);
+  const [profileState, setProfileState] = useState<Record<ProfileId, ProfileState>>(
+    createInitialProfileState(defaultProfiles)
+  );
+  const activeStreamControllers = useRef<Map<ProfileId, AbortController>>(new Map());
+  const submittingProfilesRef = useRef<Set<ProfileId>>(new Set());
+  const projectIdRef = useRef<string | null>(null);
+  const projectNameRef = useRef(newConversationName);
+  const projectCreationRef = useRef<Promise<string> | null>(null);
 
   const running = useMemo(
-    () => panes.some((pane) => paneState[pane].streaming),
-    [paneState]
+    () => profiles.some((profile) => profileState[profile.id]?.streaming),
+    [profiles, profileState]
+  );
+  const profileDisabled = useMemo(
+    () =>
+      Object.fromEntries(
+        profiles.map((profile) => [profile.id, Boolean(profileState[profile.id]?.streaming)])
+      ),
+    [profiles, profileState]
+  );
+  const configurableHarnessProfileId = useMemo(
+    () =>
+      profiles.find((profile) => Object.keys(profile.harness_modules).length > 0)?.id ??
+      profiles[profiles.length - 1]?.id,
+    [profiles]
+  );
+  const configurableHarnessModules = useMemo(
+    () =>
+      (profiles.find((profile) => profile.id === configurableHarnessProfileId)?.harness_modules ??
+        {}) as HarnessModules,
+    [configurableHarnessProfileId, profiles]
   );
 
-  function updatePane(pane: PaneId, next: (current: PaneState) => PaneState) {
-    setPaneState((current) => ({
+  function updateProfileState(profileId: ProfileId, next: (current: ProfileState) => ProfileState) {
+    setProfileState((current) => ({
       ...current,
-      [pane]: next(current[pane])
+      [profileId]: next(current[profileId] ?? { ...initialProfileState, messages: [] })
     }));
   }
 
@@ -125,6 +166,22 @@ export function App() {
     }
   }
 
+  async function refreshSkills() {
+    setSkillsLoading(true);
+    try {
+      const response = await listSkills();
+      setSkillsHomeDir(response.home_dir);
+      setSkillsDir(response.skills_dir);
+      setSkills(response.skills);
+      return response.skills;
+    } catch (error) {
+      setSkillError(errorMessage(error));
+      return [];
+    } finally {
+      setSkillsLoading(false);
+    }
+  }
+
   useEffect(() => {
     let ignore = false;
     refreshProjects().then((loadedProjects) => {
@@ -137,23 +194,33 @@ export function App() {
         loadConversation(savedProject.id);
       }
     });
+    refreshSkills();
 
     return () => {
       ignore = true;
-      activeStreamController.current?.abort();
-      clearTimers();
+      abortActiveStreams();
     };
   }, []);
 
-  function clearTimers() {
-    timers.current.forEach((timer) => window.clearTimeout(timer));
-    timers.current = [];
+  useEffect(() => {
+    projectIdRef.current = projectId;
+  }, [projectId]);
+
+  useEffect(() => {
+    projectNameRef.current = projectName;
+  }, [projectName]);
+
+  function abortActiveStreams() {
+    activeStreamControllers.current.forEach((controller) => controller.abort());
+    activeStreamControllers.current.clear();
+    submittingProfilesRef.current.clear();
   }
 
   function resetConversationState(nextProjectId: string | null, nextProjectName = newConversationName) {
-    clearTimers();
-    activeStreamController.current?.abort();
-    activeStreamController.current = null;
+    abortActiveStreams();
+    projectCreationRef.current = null;
+    projectIdRef.current = nextProjectId;
+    projectNameRef.current = nextProjectName;
     setProjectId(nextProjectId);
     setProjectName(nextProjectName);
     setTurnCount(0);
@@ -161,7 +228,8 @@ export function App() {
     setAnalysis(null);
     setIntegratedDraft("");
     setAttachments([]);
-    setPaneState(createInitialPaneState());
+    setProfiles(defaultProfiles);
+    setProfileState(createInitialProfileState(defaultProfiles));
     if (nextProjectId) {
       window.localStorage.setItem(activeProjectStorageKey, nextProjectId);
     } else {
@@ -171,6 +239,7 @@ export function App() {
 
   async function startNewConversation() {
     resetConversationState(null);
+    refreshSkills();
     try {
       const project = await createProject(newConversationName);
       setProjectId(project.id);
@@ -182,6 +251,52 @@ export function App() {
     }
   }
 
+  async function handleImportSkillFile(file: File | null) {
+    if (!file) {
+      return;
+    }
+    setSkillImporting(true);
+    setSkillError("");
+    try {
+      const skill = await importSkillFile(file);
+      await refreshSkills();
+      await selectSkill(skill.id);
+    } catch (error) {
+      setSkillError(errorMessage(error));
+    } finally {
+      setSkillImporting(false);
+    }
+  }
+
+  async function handleImportSkillFolder(files: FileList | null) {
+    if (!files || files.length === 0) {
+      return;
+    }
+    setSkillImporting(true);
+    setSkillError("");
+    try {
+      const skill = await importSkillFolder(files);
+      await refreshSkills();
+      await selectSkill(skill.id);
+    } catch (error) {
+      setSkillError(errorMessage(error));
+    } finally {
+      setSkillImporting(false);
+    }
+  }
+
+  async function selectSkill(skillId: string) {
+    setSelectedSkillId(skillId);
+    setSkillError("");
+    try {
+      const detail = await getSkill(skillId);
+      setSelectedSkillContent(detail.content);
+    } catch (error) {
+      setSelectedSkillContent("");
+      setSkillError(errorMessage(error));
+    }
+  }
+
   async function loadConversation(nextProjectId: string) {
     if (running) {
       pauseExecution();
@@ -189,30 +304,30 @@ export function App() {
     setHistoryLoading(true);
     try {
       const transcript = await getProjectTranscript(nextProjectId);
-      const nextPaneState = createInitialPaneState();
+      const nextProfiles = transcript.runs[0]?.profiles.map(({ output_text, ...profile }) => profile) ?? defaultProfiles;
+      const nextProfileState = createInitialProfileState(nextProfiles);
       for (const run of transcript.runs) {
-        for (const pane of panes) {
-          if (!run.target_panes.includes(pane)) {
-            continue;
-          }
-          nextPaneState[pane].messages.push({
-            id: `${run.id}_${pane}_user`,
+        for (const profile of run.profiles) {
+          const state = nextProfileState[profile.id] ?? { ...initialProfileState, messages: [] };
+          state.messages.push({
+            id: `${run.id}_${profile.id}_user`,
             role: "user",
             text: run.prompt,
             status: "done"
           });
-          const output = run.panes[pane]?.output_text ?? "";
-          nextPaneState[pane].messages.push({
-            id: `${run.id}_${pane}_assistant`,
+          state.messages.push({
+            id: `${run.id}_${profile.id}_assistant`,
             role: "assistant",
-            text: output || (run.status === "cancelled" ? "已暫停。" : ""),
+            text: profile.output_text || (run.status === "cancelled" ? "已暫停。" : ""),
             status: "done"
           });
+          nextProfileState[profile.id] = state;
         }
       }
       setProjectId(transcript.project.id);
       setProjectName(transcript.project.name);
-      setPaneState(nextPaneState);
+      setProfiles(nextProfiles);
+      setProfileState(nextProfileState);
       setTurnCount(transcript.runs.length);
       setInputMode(transcript.runs.length > 0 ? "independent" : "integrated");
       setAnalysis(null);
@@ -223,38 +338,8 @@ export function App() {
     }
   }
 
-  function streamMockResponse(pane: PaneId, prompt: string) {
-    const response = createAssistantText(pane, prompt);
-    const assistant = createMessage("assistant", "", "streaming");
-    updatePane(pane, (current) => ({
-      ...current,
-      streaming: true,
-      messages: [...current.messages, createMessage("user", prompt), assistant]
-    }));
-
-    const chunks = response.match(/.{1,12}/g) ?? [response];
-    chunks.forEach((chunk, index) => {
-      const timer = window.setTimeout(() => {
-        updatePane(pane, (current) => ({
-          ...current,
-          messages: current.messages.map((message) =>
-            message.id === assistant.id
-              ? {
-                  ...message,
-                  text: `${message.text}${chunk}`,
-                  status: index === chunks.length - 1 ? "done" : "streaming"
-                }
-              : message
-          ),
-          streaming: index === chunks.length - 1 ? false : current.streaming
-        }));
-      }, 80 * (index + 1));
-      timers.current.push(timer);
-    });
-  }
-
-  function prepareStreamingPane(pane: PaneId, prompt: string, assistantId: string) {
-    updatePane(pane, (current) => ({
+  function prepareStreamingProfile(profileId: ProfileId, prompt: string, assistantId: string) {
+    updateProfileState(profileId, (current) => ({
       ...current,
       streaming: true,
       messages: [
@@ -265,26 +350,47 @@ export function App() {
     }));
   }
 
-  function applyStreamEvent(event: RunStreamEvent, assistantIds: Record<PaneId, string>) {
-    if (!event.pane) {
+  function applyStreamEvent(event: RunStreamEvent, assistantIds: Record<ProfileId, string>) {
+    if (!event.profile_id) {
       return;
     }
     if (event.type === "delta" && event.text) {
-      updatePane(event.pane, (current) => ({
+      updateProfileState(event.profile_id, (current) => ({
         ...current,
         messages: current.messages.map((message) =>
-          message.id === assistantIds[event.pane as PaneId]
+          message.id === assistantIds[event.profile_id as ProfileId]
             ? { ...message, text: `${message.text}${event.text}`, status: "streaming" }
             : message
         )
       }));
     }
+    if (event.type === "tool_call" && event.tool_call) {
+      const toolCall = event.tool_call;
+      updateProfileState(event.profile_id, (current) => ({
+        ...current,
+        messages: current.messages.map((message) =>
+          message.id === assistantIds[event.profile_id as ProfileId]
+            ? {
+                ...message,
+                toolCalls: [
+                  ...(message.toolCalls ?? []),
+                  {
+                    id: `tool_${crypto.randomUUID()}`,
+                    ...toolCall,
+                    tool_name: toolCall.tool_name || toolCall.openai_name || "unknown_tool"
+                  }
+                ]
+              }
+            : message
+        )
+      }));
+    }
     if (event.type === "completed" || event.type === "error") {
-      updatePane(event.pane, (current) => ({
+      updateProfileState(event.profile_id, (current) => ({
         ...current,
         streaming: false,
         messages: current.messages.map((message) =>
-          message.id === assistantIds[event.pane as PaneId]
+          message.id === assistantIds[event.profile_id as ProfileId]
             ? {
                 ...message,
                 text:
@@ -299,47 +405,87 @@ export function App() {
     }
   }
 
+  function markProfilesFailed(
+    activeProfiles: ProfileInstance[],
+    assistantIds: Record<ProfileId, string>,
+    error: unknown
+  ) {
+    const text = `後端請求失敗：${errorMessage(error)}`;
+    activeProfiles.forEach((profile) => {
+      updateProfileState(profile.id, (current) => ({
+        ...current,
+        streaming: false,
+        messages: current.messages.map((message) =>
+          message.id === assistantIds[profile.id]
+            ? {
+                ...message,
+                text,
+                status: "done"
+              }
+            : message
+        )
+      }));
+    });
+  }
+
   async function ensureProject(prompt: string) {
     const autoName = titleFromPrompt(prompt);
-    if (projectId) {
-      if (turnCount === 0 && projectName === newConversationName) {
-        updateProjectName(projectId, autoName)
+    const currentProjectId = projectIdRef.current;
+    if (currentProjectId) {
+      if (turnCount === 0 && projectNameRef.current === newConversationName) {
+        updateProjectName(currentProjectId, autoName)
           .then((project) => {
+            projectNameRef.current = project.name;
             setProjectName(project.name);
             refreshProjects();
           })
           .catch(() => undefined);
       }
-      return projectId;
+      return currentProjectId;
     }
-    const project = await createProject(autoName);
-    setProjectId(project.id);
-    setProjectName(project.name);
-    window.localStorage.setItem(activeProjectStorageKey, project.id);
-    refreshProjects();
-    return project.id;
+    if (projectCreationRef.current) {
+      return projectCreationRef.current;
+    }
+    projectCreationRef.current = createProject(autoName)
+      .then((project) => {
+        projectIdRef.current = project.id;
+        projectNameRef.current = project.name;
+        setProjectId(project.id);
+        setProjectName(project.name);
+        window.localStorage.setItem(activeProjectStorageKey, project.id);
+        refreshProjects();
+        return project.id;
+      })
+      .finally(() => {
+        projectCreationRef.current = null;
+      });
+    return projectCreationRef.current;
   }
 
-  async function submitWithApi(prompt: string, targetPanes: PaneId[], mode: InputMode) {
-    const activeProjectId = await ensureProject(prompt);
+  async function submitWithApi(prompt: string, targetProfileIds: ProfileId[], mode: InputMode) {
     setAnalysis(null);
     const controller = new AbortController();
-    activeStreamController.current = controller;
-    const assistantIds = {
-      NoHarness: `assistant_${crypto.randomUUID()}`,
-      Harness: `assistant_${crypto.randomUUID()}`
-    };
-    const run = await createRun({
-      projectId: activeProjectId,
-      prompt,
-      inputMode: mode,
-      model,
-      reasoningEffort,
-      targetPanes,
-      harnessModules
+    const activeProfiles = profiles.filter((profile) => targetProfileIds.includes(profile.id));
+    activeProfiles.forEach((profile) => {
+      activeStreamControllers.current.set(profile.id, controller);
+      submittingProfilesRef.current.add(profile.id);
     });
-    targetPanes.forEach((pane) => prepareStreamingPane(pane, prompt, assistantIds[pane]));
+    const assistantIds = Object.fromEntries(
+      activeProfiles.map((profile) => [profile.id, `assistant_${crypto.randomUUID()}`])
+    );
+    activeProfiles.forEach((profile) =>
+      prepareStreamingProfile(profile.id, prompt, assistantIds[profile.id])
+    );
     try {
+      const activeProjectId = await ensureProject(prompt);
+      const run = await createRun({
+        projectId: activeProjectId,
+        prompt,
+        inputMode: mode,
+        model,
+        reasoningEffort,
+        profiles: activeProfiles
+      });
       await streamRun(
         run.id,
         (event) => {
@@ -350,75 +496,98 @@ export function App() {
         },
         controller.signal
       );
-    } finally {
-      if (activeStreamController.current === controller) {
-        activeStreamController.current = null;
-      }
-    }
-    getRunAnalysis(run.id).then(setAnalysis).catch(() => undefined);
-    refreshProjects();
-    setTurnCount((current) => {
-      const next = current + 1;
-      setInputMode((currentMode) => nextInputModeAfterCompletedTurn(current, currentMode));
-      return next;
-    });
-  }
-
-  function completeTurnAfterMock() {
-    const timer = window.setTimeout(() => {
+      refreshProjects();
       setTurnCount((current) => {
         const next = current + 1;
-        setInputMode((mode) => nextInputModeAfterCompletedTurn(current, mode));
+        setInputMode((currentMode) => nextInputModeAfterCompletedTurn(current, currentMode));
         return next;
       });
-    }, 1200);
-    timers.current.push(timer);
-  }
-
-  function submitIntegrated() {
-    const prompt = integratedDraft.trim();
-    if (!prompt || running) {
-      return;
-    }
-    setIntegratedDraft("");
-    submitWithApi(prompt, panes, "integrated").catch((error) => {
-      if (isAbortError(error)) {
-        return;
+    } catch (error) {
+      if (!isAbortError(error)) {
+        setAnalysis(null);
+        markProfilesFailed(activeProfiles, assistantIds, error);
       }
-      setAnalysis(null);
-      panes.forEach((pane) => streamMockResponse(pane, prompt));
-      completeTurnAfterMock();
-    });
+    } finally {
+      activeProfiles.forEach((profile) => {
+        if (activeStreamControllers.current.get(profile.id) === controller) {
+          activeStreamControllers.current.delete(profile.id);
+        }
+        submittingProfilesRef.current.delete(profile.id);
+      });
+    }
   }
 
-  function submitPane(pane: PaneId) {
-    const prompt = paneState[pane].draft.trim();
-    if (!prompt || running) {
+  async function submitIntegrated() {
+    const draft = integratedDraft.trim();
+    if ((!draft && attachments.length === 0) || running || submittingProfilesRef.current.size > 0) {
       return;
     }
-    updatePane(pane, (current) => ({ ...current, draft: "" }));
-    submitWithApi(prompt, [pane], "independent").catch((error) => {
-      if (isAbortError(error)) {
-        return;
-      }
-      setAnalysis(null);
-      streamMockResponse(pane, prompt);
-      completeTurnAfterMock();
-    });
+    try {
+      const prompt = await buildPromptWithContext(draft);
+      setIntegratedDraft("");
+      clearAttachments();
+      void submitWithApi(prompt, profiles.map((profile) => profile.id), "integrated");
+    } catch (error) {
+      setSkillError(errorMessage(error));
+      setSkillsOpen(true);
+    }
   }
 
-  function handleAttach(files: FileList | null) {
-    if (!files) {
+  async function submitProfile(profileId: ProfileId) {
+    const profile = profiles.find((candidate) => candidate.id === profileId);
+    const draft = profileState[profileId]?.draft.trim() ?? "";
+    if (!profile) {
       return;
     }
-    const previews = Array.from(files).map((file) => ({
-      id: crypto.randomUUID(),
-      name: file.name,
-      type: file.type,
-      size: file.size,
-      url: file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined
-    }));
+    if (
+      (!draft && attachments.length === 0) ||
+      Boolean(profileState[profileId]?.streaming) ||
+      submittingProfilesRef.current.has(profileId)
+    ) {
+      return;
+    }
+    try {
+      const prompt = await buildPromptWithContext(draft);
+      updateProfileState(profileId, (current) => ({ ...current, draft: "" }));
+      clearAttachments();
+      void submitWithApi(prompt, [profileId], "independent");
+    } catch (error) {
+      setSkillError(errorMessage(error));
+      setSkillsOpen(true);
+    }
+  }
+
+  async function handleAttach(files: FileList | File[] | null) {
+    if (!files || files.length === 0) {
+      return;
+    }
+    const previews = await ingestFiles(files);
     setAttachments((current) => [...current, ...previews]);
+  }
+
+  function buildPromptWithAttachments(text: string) {
+    return `${text}${attachmentPromptBlock(attachments)}`.trim();
+  }
+
+  async function buildPromptWithContext(text: string) {
+    const withAttachments = buildPromptWithAttachments(text);
+    const skillIds = parseSkillCommandIds(text, skills);
+    if (!skillIds.length) {
+      return withAttachments;
+    }
+    const details = await Promise.all(skillIds.map((skillId) => getSkill(skillId)));
+    return `${withAttachments}${skillDetailsPromptBlock(details)}`.trim();
+  }
+
+  function clearAttachments() {
+    setAttachments((current) => {
+      current.forEach((attachment) => {
+        if (attachment.url) {
+          URL.revokeObjectURL(attachment.url);
+        }
+      });
+      return [];
+    });
   }
 
   function removeAttachment(id: string) {
@@ -432,20 +601,31 @@ export function App() {
   }
 
   function updateHarnessModule(id: HarnessModuleId, enabled: boolean) {
-    setHarnessModules((current) => ({ ...current, [id]: enabled }));
+    if (!configurableHarnessProfileId) {
+      return;
+    }
+    setProfiles((current) =>
+      current.map((profile) =>
+        profile.id === configurableHarnessProfileId
+          ? {
+              ...profile,
+              harness_modules: { ...profile.harness_modules, [id]: enabled }
+            }
+          : profile
+      )
+    );
   }
 
   function pauseExecution() {
-    activeStreamController.current?.abort();
-    activeStreamController.current = null;
-    clearTimers();
-    setPaneState((current) => {
+    abortActiveStreams();
+    setProfileState((current) => {
       const next = { ...current };
-      for (const pane of panes) {
-        next[pane] = {
-          ...next[pane],
+      for (const profile of profiles) {
+        const state = next[profile.id] ?? { ...initialProfileState, messages: [] };
+        next[profile.id] = {
+          ...state,
           streaming: false,
-          messages: next[pane].messages.map((message) =>
+          messages: state.messages.map((message) =>
             message.status === "streaming"
               ? {
                   ...message,
@@ -465,15 +645,22 @@ export function App() {
       <TopBar
         model={model}
         reasoningEffort={reasoningEffort}
-        harnessModules={harnessModules}
+        harnessModules={configurableHarnessModules}
         historyOpen={historyOpen}
+        skillsOpen={skillsOpen}
         onModelChange={setModel}
         onReasoningEffortChange={setReasoningEffort}
         onHarnessModuleChange={updateHarnessModule}
         onNewConversation={startNewConversation}
         onToggleHistory={() => {
           setHistoryOpen((current) => !current);
+          setSkillsOpen(false);
           refreshProjects();
+        }}
+        onToggleSkills={() => {
+          setSkillsOpen((current) => !current);
+          setHistoryOpen(false);
+          refreshSkills();
         }}
       />
       {historyOpen ? (
@@ -484,17 +671,30 @@ export function App() {
           onSelectProject={loadConversation}
         />
       ) : null}
+      {skillsOpen ? (
+        <SkillPanel
+          homeDir={skillsHomeDir}
+          skillsDir={skillsDir}
+          skills={skills}
+          loading={skillsLoading}
+          importing={skillImporting}
+          selectedSkillId={selectedSkillId}
+          selectedSkillContent={selectedSkillContent}
+          error={skillError}
+          onImportFile={handleImportSkillFile}
+          onImportFolder={handleImportSkillFolder}
+          onSelectSkill={selectSkill}
+        />
+      ) : null}
       <section className="workspace" aria-label="HarnessDiff chat comparison">
-        <ChatPane
-          pane="NoHarness"
-          messages={paneState.NoHarness.messages}
-          streaming={paneState.NoHarness.streaming}
-        />
-        <ChatPane
-          pane="Harness"
-          messages={paneState.Harness.messages}
-          streaming={paneState.Harness.streaming}
-        />
+        {profiles.map((profile) => (
+          <ChatPane
+            key={profile.id}
+            profile={profile}
+            messages={profileState[profile.id]?.messages ?? []}
+            streaming={profileState[profile.id]?.streaming ?? false}
+          />
+        ))}
       </section>
       <AnalysisSummary
         turnCount={turnCount}
@@ -505,20 +705,24 @@ export function App() {
       <Composer
         inputMode={inputMode}
         integratedDraft={integratedDraft}
-        noHarnessDraft={paneState.NoHarness.draft}
-        harnessDraft={paneState.Harness.draft}
+        profiles={profiles}
+        profileDrafts={Object.fromEntries(
+          profiles.map((profile) => [profile.id, profileState[profile.id]?.draft ?? ""])
+        )}
+        skills={skills}
         attachments={attachments}
         disabled={running}
+        profileDisabled={profileDisabled}
         running={running}
         onModeChange={setInputMode}
         onIntegratedDraftChange={setIntegratedDraft}
-        onPaneDraftChange={(pane, value) =>
-          updatePane(pane, (current) => ({ ...current, draft: value }))
+        onProfileDraftChange={(profileId, value) =>
+          updateProfileState(profileId, (current) => ({ ...current, draft: value }))
         }
         onAttach={handleAttach}
         onRemoveAttachment={removeAttachment}
         onSubmitIntegrated={submitIntegrated}
-        onSubmitPane={submitPane}
+        onSubmitProfile={submitProfile}
         onPause={pauseExecution}
       />
     </main>

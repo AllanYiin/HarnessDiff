@@ -14,6 +14,21 @@ data/
       runs/
 ```
 
+HarnessDiff also maintains a user-level home outside project JSON storage:
+
+```text
+~/.harnessdiff/
+  CLAUDE.md
+  AGENTS.md
+  agents.md
+  skills/
+    {skill_id}/
+      SKILL.md
+      ...
+```
+
+`HARNESSDIFF_HOME` can override this location. `skills/{skill_id}/SKILL.md` is parsed for the first-layer skill `name`, `description`, and optional `version`. New conversation context receives only that first layer; full skill content is read on demand through the skill API/UI.
+
 ## Project Document
 
 ```json
@@ -55,7 +70,7 @@ runs/
   "reasoning_effort": "medium",
   "target_panes": ["NoHarness", "Harness"],
   "harness_modules": {
-    "context_manifest": true,
+    "context_summary": true,
     "source_map": true,
     "guardrails": true,
     "output_contract": true,
@@ -83,7 +98,7 @@ Each project stores its default Harness module profile at `config/harness.defaul
   "schema_version": "2026-05-22.1",
   "profile": "harness.default",
   "modules": {
-    "context_manifest": { "enabled": true },
+    "context_summary": { "enabled": true },
     "source_map": { "enabled": true },
     "guardrails": { "enabled": true },
     "output_contract": { "enabled": true },
@@ -96,7 +111,38 @@ Each project stores its default Harness module profile at `config/harness.defaul
 }
 ```
 
-Run-level `harness_modules` are the effective booleans after applying API/UI overrides to the project config. They are stored in `run.json` and repeated in `Harness/input.json` with the final instructions for traceability.
+Run-level `harness_modules` are the effective booleans after applying API/UI overrides to the project config. They are stored in `run.json` and repeated in profile `input.json` files with the final instructions for traceability. Profiles also store `tool_names` for the tools sent to the provider. Harness profiles with `tool_policy` enabled receive the full set, including `standard.shell.bash`, `harness.subagent.run`, and `multi_tool_use.parallel`; NoHarness profiles receive standard web/fs/data tools but omit those three.
+Older artifacts that use `context_manifest` are read as `context_summary` for backward compatibility.
+
+Profile `input.json`:
+
+```json
+{
+  "schema_version": "2026-05-22.1",
+  "profile_id": "harness",
+  "profile_label": "Harness",
+  "prompt": "User prompt",
+  "instructions": "Final provider instructions",
+  "harness_modules": { "tool_policy": true },
+  "conversation_messages": [],
+  "tool_names": ["standard.shell.bash", "standard.web.fetch", "standard.fs.read", "harness.subagent.run", "multi_tool_use.parallel"],
+  "created_at": "2026-05-22T00:00:00+00:00"
+}
+```
+
+Tool call events are stored in `{profile_id}/events.jsonl` as provider events with `type: "tool_call"` and a raw payload containing the tool name, masked/truncated arguments, elapsed milliseconds, and either a result summary or structured error.
+
+Subagent calls are stored under the caller profile and do not replace the caller profile output:
+
+```text
+runs/{run_id}/{profile_id}/subagents/{subagent_id}/
+  input.json
+  output.json
+  events.jsonl
+  usage.json
+```
+
+Each subagent `usage.json` records the subagent provider token usage. Analysis rolls these values up into the caller profile without overwriting the caller profile's own `usage.json`.
 
 ## Analysis Document
 
@@ -126,10 +172,19 @@ Completed runs write `analysis/analysis.json`:
         "total_tokens": 100,
         "source": "provider_reported"
       },
-      "context_sections": [],
+      "context_sections": [
+        {
+          "key": "tool_definitions",
+          "label": "Tool definitions",
+          "status": "sent",
+          "characters": 120,
+          "estimated_tokens": 30,
+          "notes": "Tool definitions were sent to the provider for this profile."
+        }
+      ],
       "output_characters": 80,
       "enabled_harness_modules": [],
-      "provider_context_keys": ["instructions", "prompt"]
+      "provider_context_keys": ["instructions", "prompt", "tools"]
     }
   },
   "comparison": {

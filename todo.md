@@ -14,5 +14,7 @@
 
 ## Future
 
+- [x] Allow independent panes to submit concurrently without a global composer lock.
 - [x] Package release ZIP with `python scripts/project_launcher.py --package`.
+- [ ] Replace Playwright `/api` route fixtures with real-backend e2e coverage; keep any remaining fixture tests clearly labeled as UI-only.
 - [ ] Add UI-based API key setup flow if the app is handed to users who cannot set environment variables.

@@ -1,0 +1,219 @@
+from __future__ import annotations
+
+import json
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from app.services.read_only_bash import ReadOnlyBashExecutor
+
+
+ALLOWED_TOOL_NAMES: tuple[str, ...] = (
+    "standard.web.extract_links",
+    "standard.web.search",
+    "standard.web.fetch",
+    "standard.web.extract_text",
+    "standard.fs.list",
+    "standard.fs.stat",
+    "standard.fs.search",
+    "standard.fs.read",
+    "standard.data.json_parse",
+    "standard.data.json_validate",
+    "standard.data.csv_inspect",
+    "standard.data.jsonl_inspect",
+    "standard.shell.bash",
+)
+
+
+@dataclass(frozen=True)
+class ToolInvocationRecord:
+    ok: bool
+    name: str
+    openai_name: str
+    arguments: dict[str, Any]
+    elapsed_ms: int
+    result: Any = None
+    error: dict[str, Any] | None = None
+
+    def output_payload(self) -> dict[str, Any]:
+        if self.ok:
+            return {"ok": True, "tool_name": self.name, "result": self.result}
+        return {"ok": False, "tool_name": self.name, "error": self.error or {}}
+
+    def event_payload(self) -> dict[str, Any]:
+        payload = {
+            "ok": self.ok,
+            "tool_name": self.name,
+            "openai_name": self.openai_name,
+            "arguments": _truncate_jsonable(self.arguments),
+            "elapsed_ms": self.elapsed_ms,
+        }
+        if self.ok:
+            payload["result_summary"] = _json_summary(self.result)
+        else:
+            payload["error"] = self.error or {}
+        return payload
+
+
+class ToolAnythingRuntime:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        allowed_tool_names: tuple[str, ...] = ALLOWED_TOOL_NAMES,
+    ) -> None:
+        from toolanything import StandardToolOptions, ToolRegistry, register_standard_tools
+        from toolanything import ToolSpec
+        from toolanything.adapters.openai_adapter import OpenAIAdapter
+
+        self.root = root.resolve()
+        self.allowed_tool_names = tuple(allowed_tool_names)
+        self.registry = ToolRegistry()
+        self.bash_executor = ReadOnlyBashExecutor(self.root)
+        register_standard_tools(
+            self.registry,
+            StandardToolOptions(
+                roots={"workspace": self.root},
+                include_write_tools=False,
+            ),
+        )
+        self.registry.register(
+            ToolSpec(
+                name="standard.shell.bash",
+                description=(
+                    "Run a constrained read-only Bash-style command inside the "
+                    "workspace root. Supports grep, sed, awk, head, tail, wc, "
+                    "nl, cat, ls, find, pwd, echo, simple pipes, and &&/||/; "
+                    "control flow. Paths must be workspace-relative. Mutation, "
+                    "network access, redirects, and process-launch commands are rejected."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": (
+                                "Read-only Bash-style command to run in the workspace. "
+                                "Use relative paths such as apps/api/app/main.py."
+                            ),
+                        }
+                    },
+                    "required": ["command"],
+                    "additionalProperties": False,
+                },
+                tags=("standard", "shell", "readonly"),
+                strict=True,
+                func=self.bash_executor.run,
+            )
+        )
+        for spec in list(self.registry.list()):
+            if spec.name not in self.allowed_tool_names:
+                self.registry.unregister(spec.name)
+        registered = {spec.name for spec in self.registry.list()}
+        missing = set(self.allowed_tool_names) - registered
+        if missing:
+            raise RuntimeError(f"ToolAnything tools missing from registry: {sorted(missing)}")
+        self.adapter = OpenAIAdapter(self.registry)
+
+    def list_tool_names(self) -> tuple[str, ...]:
+        return tuple(spec.name for spec in self.registry.list())
+
+    def list_openai_tools(self) -> list[dict[str, Any]]:
+        return [_to_responses_tool(tool) for tool in self.adapter.to_schema()]
+
+    def tool_manifest(self) -> list[dict[str, Any]]:
+        return self.registry.to_tool_manifest(tags=["standard"])
+
+    def to_openai_name(self, tool_name: str) -> str:
+        return self.adapter.to_openai_name(tool_name)
+
+    def from_openai_name(self, openai_name: str) -> str:
+        return self.adapter.from_openai_name(openai_name)
+
+    async def invoke_openai_tool(
+        self, openai_name: str, arguments: dict[str, Any]
+    ) -> ToolInvocationRecord:
+        started = time.perf_counter()
+        original_name = self.from_openai_name(openai_name)
+        if original_name not in self.allowed_tool_names:
+            return ToolInvocationRecord(
+                ok=False,
+                name=original_name,
+                openai_name=openai_name,
+                arguments=arguments,
+                elapsed_ms=_elapsed_ms(started),
+                error={
+                    "type": "tool_not_allowed",
+                    "message": f"Tool is not enabled for HarnessDiff: {original_name}",
+                },
+            )
+        try:
+            result = await self.registry.invoke_tool_async(
+                original_name,
+                arguments=dict(arguments or {}),
+            )
+        except Exception as exc:
+            return ToolInvocationRecord(
+                ok=False,
+                name=original_name,
+                openai_name=openai_name,
+                arguments=arguments,
+                elapsed_ms=_elapsed_ms(started),
+                error={
+                    "type": exc.__class__.__name__,
+                    "message": str(exc),
+                },
+            )
+        return ToolInvocationRecord(
+            ok=True,
+            name=original_name,
+            openai_name=openai_name,
+            arguments=arguments,
+            elapsed_ms=_elapsed_ms(started),
+            result=result,
+        )
+
+
+def create_default_tool_runtime() -> ToolAnythingRuntime:
+    repo_root = Path(__file__).resolve().parents[4]
+    return ToolAnythingRuntime(repo_root)
+
+
+def _to_responses_tool(tool: dict[str, Any]) -> dict[str, Any]:
+    if tool.get("type") != "function":
+        return dict(tool)
+    function = tool.get("function")
+    if not isinstance(function, dict):
+        return dict(tool)
+    payload = {
+        "type": "function",
+        "name": function.get("name"),
+        "description": function.get("description", ""),
+        "parameters": function.get("parameters", {"type": "object", "properties": {}}),
+    }
+    if "strict" in function:
+        payload["strict"] = function["strict"]
+    return payload
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, int((time.perf_counter() - started) * 1000))
+
+
+def _json_summary(value: Any, *, max_chars: int = 1200) -> str:
+    try:
+        text = json.dumps(value, ensure_ascii=False, default=str)
+    except TypeError:
+        text = repr(value)
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 3] + "..."
+
+
+def _truncate_jsonable(value: Any, *, max_chars: int = 1200) -> Any:
+    summary = _json_summary(value, max_chars=max_chars)
+    try:
+        return json.loads(summary)
+    except json.JSONDecodeError:
+        return summary

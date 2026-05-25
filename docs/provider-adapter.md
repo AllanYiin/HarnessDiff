@@ -14,6 +14,7 @@ The route layer should consume provider-neutral events:
 
 - `created`
 - `delta`
+- `tool_call`
 - `completed`
 - `error`
 
@@ -22,6 +23,12 @@ Provider-specific raw events and raw usage should be preserved in local JSON for
 ## OpenAI Responses API Notes
 
 The OpenAI provider stage must use Responses API streaming and handle semantic events such as `response.output_text.delta`. It must preserve usage fields including input, output, total, and reasoning tokens when present.
+
+When `LLMRequest.tools_enabled` is true, the OpenAI provider also sends the HarnessDiff chat tool schema, handles `function_call` output items, executes the requested tool through the local tool runtime, appends `function_call_output`, and resumes the Responses request until the model returns a final non-tool response or the tool round limit is reached. The default tool round limit is 16 and can be overridden with `HARNESSDIFF_MAX_TOOL_ROUNDS`. Harness profiles with `tool_policy` receive the full tool set: standard web/fs/data tools, `standard.shell.bash`, `harness.subagent.run`, and `multi_tool_use.parallel`; the Harness tool schema places `standard.shell.bash` first. NoHarness profiles receive the standard web/fs/data tools but omit `standard.shell.bash`, `harness.subagent.run`, and `multi_tool_use.parallel`.
+
+When a standard web tool returns URLs, the provider enriches the returned `function_call_output` with `citation_sources` and `citation_guidance`. This keeps source attribution in the final synthesis context without changing the public SSE or storage schema.
+
+`harness.subagent.run` is a chat-local function tool. It runs one fixed backend subagent as an isolated provider request, disables nested tools for that subagent, writes subagent artifacts under the caller profile, and returns the subagent text as function output to the manager model. `multi_tool_use.parallel` is also chat-local and can concurrently invoke only tools that are already allowed for the current profile.
 
 ## Implemented Stage 3 Boundary
 
@@ -35,6 +42,7 @@ Provider events are converted to app-level SSE payloads:
 
 - `created`
 - `delta`
+- `tool_call`
 - `completed`
 - `error`
 - `analysis_ready`
@@ -74,7 +82,7 @@ runs/{run_id}/
     events.jsonl
 ```
 
-`events.jsonl` preserves provider events for debugging. `usage.json` keeps normalized usage and raw provider usage when available.
+`events.jsonl` preserves provider events and tool-call events for debugging. `usage.json` keeps normalized usage and raw provider usage when available. Tool definitions are sent to both Harness and NoHarness profiles when the local tool runtime is loaded, with NoHarness using the restricted tool set described above. Subagent calls additionally write `{profile_id}/subagents/{subagent_id}/input.json`, `output.json`, `events.jsonl`, and `usage.json`.
 
 ## Stage 5 Analysis Boundary
 
@@ -87,6 +95,8 @@ Analysis is intentionally outside the provider adapter. After a run completes, `
 - prior run artifacts in the same project
 
 The analyzer writes `analysis/analysis.json` and emits an `analysis_ready` SSE payload before `run_completed`. It does not call an LLM. Provider-reported usage remains the source of truth for billed token numbers; context section token counts are only rough structural estimates.
+
+Subagent token usage is tracked separately from the manager profile usage and is exposed as both per-subagent usage and caller-level rollup usage in analysis. This keeps the original Harness vs NoHarness comparison stable while still showing the full cost of delegated work.
 
 If any pane raises a provider error, `RunOrchestrator` writes the pane error event, marks the run `failed`, emits `run_failed`, and does not write analysis for that run. This prevents failed partial output from being reported as a complete comparison.
 

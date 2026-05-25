@@ -9,6 +9,7 @@ type Block =
   | { type: "paragraph"; text: string }
   | { type: "blockquote"; text: string }
   | { type: "code"; code: string; language?: string }
+  | { type: "table"; headers: string[]; rows: string[][] }
   | { type: "list"; ordered: boolean; items: string[] };
 
 function isSafeUrl(url: string) {
@@ -103,6 +104,18 @@ function parseMarkdown(source: string): Block[] {
       continue;
     }
 
+    if (isTableStart(lines, index)) {
+      const headers = splitTableRow(lines[index]);
+      index += 2;
+      const rows: string[][] = [];
+      while (index < lines.length && isTableRow(lines[index])) {
+        rows.push(normalizeTableRow(splitTableRow(lines[index]), headers.length));
+        index += 1;
+      }
+      blocks.push({ type: "table", headers, rows });
+      continue;
+    }
+
     if (/^>\s?/.test(line)) {
       const quoteLines: string[] = [];
       while (index < lines.length && /^>\s?/.test(lines[index])) {
@@ -137,6 +150,7 @@ function parseMarkdown(source: string): Block[] {
       lines[index].trim() &&
       !lines[index].match(/^```/) &&
       !lines[index].match(/^(#{1,3})\s+/) &&
+      !isTableStart(lines, index) &&
       !lines[index].match(/^>\s?/) &&
       !lines[index].match(/^\s*[-*]\s+/) &&
       !lines[index].match(/^\s*\d+[.)]\s+/)
@@ -148,6 +162,42 @@ function parseMarkdown(source: string): Block[] {
   }
 
   return blocks;
+}
+
+function isTableStart(lines: string[], index: number) {
+  return (
+    index + 1 < lines.length &&
+    isTableRow(lines[index]) &&
+    isTableDelimiter(lines[index + 1]) &&
+    splitTableRow(lines[index]).length === splitTableRow(lines[index + 1]).length
+  );
+}
+
+function isTableRow(line: string) {
+  return line.includes("|") && line.trim().length > 0;
+}
+
+function isTableDelimiter(line: string) {
+  const cells = splitTableRow(line);
+  return (
+    cells.length > 0 &&
+    cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, "")))
+  );
+}
+
+function splitTableRow(line: string) {
+  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  return trimmed.split(/(?<!\\)\|/).map((cell) => cell.replace(/\\\|/g, "|").trim());
+}
+
+function normalizeTableRow(cells: string[], length: number) {
+  if (cells.length === length) {
+    return cells;
+  }
+  if (cells.length > length) {
+    return cells.slice(0, length);
+  }
+  return [...cells, ...Array.from({ length: length - cells.length }, () => "")];
 }
 
 export function MarkdownContent({ source }: MarkdownContentProps) {
@@ -178,6 +228,32 @@ export function MarkdownContent({ source }: MarkdownContentProps) {
                 <li key={itemIndex}>{renderInlineWithBreaks(item, `list-${index}-${itemIndex}`)}</li>
               ))}
             </List>
+          );
+        }
+        if (block.type === "table") {
+          return (
+            <div className="markdownTableScroller" key={index}>
+              <table>
+                <thead>
+                  <tr>
+                    {block.headers.map((header, headerIndex) => (
+                      <th key={headerIndex}>{renderInline(header, `table-${index}-header-${headerIndex}`)}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {block.rows.map((row, rowIndex) => (
+                    <tr key={rowIndex}>
+                      {row.map((cell, cellIndex) => (
+                        <td key={cellIndex}>
+                          {renderInlineWithBreaks(cell, `table-${index}-${rowIndex}-${cellIndex}`)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           );
         }
         return <p key={index}>{renderInlineWithBreaks(block.text, `paragraph-${index}`)}</p>;

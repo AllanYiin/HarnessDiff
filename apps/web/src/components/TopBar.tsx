@@ -1,10 +1,10 @@
 import { useState } from "react";
-import { History, Plus, Settings, SplitSquareHorizontal } from "lucide-react";
+import { History, Plus, Settings, Sparkles, SplitSquareHorizontal } from "lucide-react";
 
 import type { HarnessModuleId, HarnessModules } from "../types";
 
 const harnessModuleOptions: { id: HarnessModuleId; label: string }[] = [
-  { id: "context_manifest", label: "Context Manifest" },
+  { id: "context_summary", label: "Context Summary" },
   { id: "source_map", label: "Source Map" },
   { id: "guardrails", label: "Guardrails" },
   { id: "output_contract", label: "Output Contract" },
@@ -20,11 +20,13 @@ type TopBarProps = {
   reasoningEffort: string;
   harnessModules: HarnessModules;
   historyOpen: boolean;
+  skillsOpen: boolean;
   onModelChange: (value: string) => void;
   onReasoningEffortChange: (value: string) => void;
   onHarnessModuleChange: (id: HarnessModuleId, enabled: boolean) => void;
   onNewConversation: () => void;
   onToggleHistory: () => void;
+  onToggleSkills: () => void;
 };
 
 export function TopBar({
@@ -32,11 +34,13 @@ export function TopBar({
   reasoningEffort,
   harnessModules,
   historyOpen,
+  skillsOpen,
   onModelChange,
   onReasoningEffortChange,
   onHarnessModuleChange,
   onNewConversation,
-  onToggleHistory
+  onToggleHistory,
+  onToggleSkills
 }: TopBarProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -62,6 +66,15 @@ export function TopBar({
         >
           <History aria-hidden="true" size={16} />
           歷史
+        </button>
+        <button
+          className={`textButton ${skillsOpen ? "selected" : ""}`}
+          type="button"
+          onClick={onToggleSkills}
+          aria-expanded={skillsOpen}
+        >
+          <Sparkles aria-hidden="true" size={16} />
+          技能
         </button>
         <label>
           <span>模型</span>

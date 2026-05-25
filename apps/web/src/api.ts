@@ -1,4 +1,4 @@
-import type { HarnessModules, InputMode, PaneId } from "./types";
+import type { HarnessModules, InputMode, ProfileId, ProfileInstance, ToolCallTrace } from "./types";
 
 type Project = {
   id: string;
@@ -16,10 +16,9 @@ export type ProjectSummary = Project;
 export type TranscriptRun = {
   id: string;
   prompt: string;
-  target_panes: PaneId[];
   input_mode: InputMode;
   status: string;
-  panes: Partial<Record<PaneId, { output_text: string }>>;
+  profiles: Array<ProfileInstance & { output_text: string }>;
 };
 
 export type ProjectTranscript = {
@@ -29,23 +28,27 @@ export type ProjectTranscript = {
 
 export type RunStreamEvent = {
   run_id: string;
-  pane?: PaneId;
+  profile_id?: ProfileId;
+  profile_label?: string;
   type:
     | "created"
     | "delta"
     | "completed"
     | "error"
+    | "tool_call"
     | "analysis_ready"
     | "run_completed"
     | "run_failed";
   text?: string | null;
   message?: string;
+  tool_call?: Omit<ToolCallTrace, "id">;
   usage?: unknown;
   analysis?: AnalysisDocument;
 };
 
 export type TokenUsage = {
   input_tokens: number;
+  cached_tokens: number;
   output_tokens: number;
   reasoning_tokens: number;
   total_tokens: number;
@@ -61,13 +64,15 @@ export type ContextSection = {
   notes: string;
 };
 
-export type PaneAnalysis = {
-  pane: PaneId;
+export type ProfileAnalysis = {
+  profile_id: ProfileId;
+  profile_label: string;
   current_turn_usage: TokenUsage;
   cumulative_usage: TokenUsage;
   context_sections: ContextSection[];
   output_characters: number;
   enabled_harness_modules: string[];
+  harness_decisions: Record<string, unknown>[];
   provider_context_keys: string[];
 };
 
@@ -77,15 +82,35 @@ export type AnalysisDocument = {
   run_id: string;
   turn_index: number;
   generated_at: string;
-  panes: Partial<Record<PaneId, PaneAnalysis>>;
+  profiles: Record<ProfileId, ProfileAnalysis>;
   comparison: {
     total_token_delta: number;
     input_token_delta: number;
     output_token_delta: number;
     reasoning_token_delta: number;
-    harness_extra_sections: string[];
+    controlled_profile_extra_sections: string[];
   };
   notes: string[];
+};
+
+export type SkillSummary = {
+  id: string;
+  name: string;
+  description: string;
+  version: string;
+  path: string;
+};
+
+export type SkillListResponse = {
+  home_dir: string;
+  skills_dir: string;
+  skills: SkillSummary[];
+};
+
+export type SkillDetail = {
+  id: string;
+  path: string;
+  content: string;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -96,8 +121,16 @@ function asString(value: unknown, fallback = "") {
   return typeof value === "string" ? value : fallback;
 }
 
-function isPaneId(value: unknown): value is PaneId {
-  return value === "NoHarness" || value === "Harness";
+function normalizeHarnessModules(value: unknown): Partial<HarnessModules> {
+  if (!isRecord(value)) {
+    return {};
+  }
+  const modules = { ...value };
+  if (!("context_summary" in modules) && "context_manifest" in modules) {
+    modules.context_summary = modules.context_manifest;
+  }
+  delete modules.context_manifest;
+  return modules as Partial<HarnessModules>;
 }
 
 function normalizeProject(value: unknown, fallbackName: string): Project {
@@ -117,25 +150,23 @@ function normalizeTranscriptRun(value: unknown): TranscriptRun | null {
   if (!isRecord(value) || typeof value.id !== "string" || typeof value.prompt !== "string") {
     return null;
   }
-  const targetPanes = Array.isArray(value.target_panes)
-    ? value.target_panes.filter(isPaneId)
+  const profiles = Array.isArray(value.profiles)
+    ? value.profiles.flatMap((profile) => {
+        if (!isRecord(profile) || typeof profile.id !== "string") return [];
+        return [{
+          id: profile.id,
+          label: asString(profile.label, profile.id),
+          harness_modules: normalizeHarnessModules(profile.harness_modules),
+          output_text: asString(profile.output_text)
+        }];
+      })
     : [];
-  const panes: TranscriptRun["panes"] = {};
-  if (isRecord(value.panes)) {
-    for (const pane of targetPanes) {
-      const panePayload = value.panes[pane];
-      panes[pane] = {
-        output_text: isRecord(panePayload) ? asString(panePayload.output_text) : ""
-      };
-    }
-  }
   return {
     id: value.id,
     prompt: value.prompt,
-    target_panes: targetPanes,
     input_mode: value.input_mode === "independent" ? "independent" : "integrated",
     status: asString(value.status, "completed"),
-    panes
+    profiles
   };
 }
 
@@ -206,8 +237,7 @@ export async function createRun(params: {
   inputMode: InputMode;
   model: string;
   reasoningEffort: string;
-  targetPanes: PaneId[];
-  harnessModules: HarnessModules;
+  profiles: ProfileInstance[];
 }): Promise<Run> {
   const response = await fetch(`/api/projects/${params.projectId}/runs`, {
     method: "POST",
@@ -217,12 +247,11 @@ export async function createRun(params: {
       input_mode: params.inputMode,
       model: params.model,
       reasoning_effort: params.reasoningEffort,
-      target_panes: params.targetPanes,
-      harness_modules: params.harnessModules
+      profiles: params.profiles
     })
   });
   if (!response.ok) {
-    throw new Error(`Failed to create run: ${response.status}`);
+    throw new Error(await responseErrorMessage(response, "建立 run 失敗"));
   }
   return response.json();
 }
@@ -230,7 +259,7 @@ export async function createRun(params: {
 export async function getRunAnalysis(runId: string): Promise<AnalysisDocument> {
   const response = await fetch(`/api/runs/${runId}/analysis`);
   if (!response.ok) {
-    throw new Error(`Failed to load analysis: ${response.status}`);
+    throw new Error(await responseErrorMessage(response, "載入分析失敗"));
   }
   return response.json();
 }
@@ -245,7 +274,7 @@ export async function streamRun(
     signal
   });
   if (!response.ok || !response.body) {
-    throw new Error(`Failed to stream run: ${response.status}`);
+    throw new Error(await responseErrorMessage(response, "串流 run 失敗"));
   }
 
   const reader = response.body.getReader();
@@ -269,5 +298,107 @@ export async function streamRun(
       }
       onEvent(JSON.parse(line.slice("data: ".length)));
     }
+  }
+}
+
+export async function listSkills(): Promise<SkillListResponse> {
+  const response = await fetch("/api/skills");
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, "載入技能清單失敗"));
+  }
+  return response.json();
+}
+
+export async function getSkill(skillId: string): Promise<SkillDetail> {
+  const response = await fetch(`/api/skills/${encodeURIComponent(skillId)}`);
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, "載入技能內容失敗"));
+  }
+  return response.json();
+}
+
+export async function importSkillFile(file: File): Promise<SkillSummary> {
+  const mode = file.name.toLowerCase().endsWith(".zip") ? "zip" : "skill";
+  const response = await fetch("/api/skills/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      mode,
+      filename: file.name,
+      data_base64: await fileToBase64(file)
+    })
+  });
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, "匯入技能失敗"));
+  }
+  return (await response.json()).skill;
+}
+
+export async function importSkillFolder(files: FileList): Promise<SkillSummary> {
+  const fileItems = await Promise.all(
+    Array.from(files).map(async (file) => ({
+      relative_path: file.webkitRelativePath || file.name,
+      data_base64: await fileToBase64(file)
+    }))
+  );
+  const response = await fetch("/api/skills/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      mode: "folder",
+      filename: folderNameFromFiles(files),
+      files: fileItems
+    })
+  });
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, "匯入技能資料夾失敗"));
+  }
+  return (await response.json()).skill;
+}
+
+async function fileToBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function folderNameFromFiles(files: FileList) {
+  const first = files[0];
+  const relativePath = first?.webkitRelativePath ?? "";
+  return relativePath.split("/")[0] || "skill-folder";
+}
+
+async function responseErrorMessage(response: Response, action: string): Promise<string> {
+  const suffix = await responseErrorDetail(response);
+  return suffix ? `${action}：HTTP ${response.status} - ${suffix}` : `${action}：HTTP ${response.status}`;
+}
+
+async function responseErrorDetail(response: Response): Promise<string> {
+  try {
+    const data = await response.clone().json();
+    if (typeof data === "string") {
+      return data;
+    }
+    if (data && typeof data === "object") {
+      const record = data as Record<string, unknown>;
+      const detail = record.detail ?? record.message ?? record.error;
+      if (typeof detail === "string") {
+        return detail;
+      }
+      if (detail !== undefined) {
+        return JSON.stringify(detail);
+      }
+    }
+  } catch {
+    // Fall through to plain-text body.
+  }
+  try {
+    return (await response.text()).trim();
+  } catch {
+    return "";
   }
 }

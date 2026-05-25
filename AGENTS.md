@@ -13,6 +13,7 @@
 - 啟動器必須由 `scripts/project_launcher.py` 生成或維護；不要手寫另一套平行主入口。
 - 優先保留向前相容與現有資料格式；不要任意改 local JSON schema、endpoint 或檔案路徑。
 - OpenAI key 只能從環境變數或 `.env` 讀取，不得寫入程式、logs 或文件範例中的真實值。
+- 全專案嚴禁用 mock、route interception、fixture 或 fallback 去掩蓋真實 backend/API/儲存契約問題。測試替身只能用於隔離外部不可控依賴，且測試名稱與斷言必須明確標示它不代表整合驗證。
 - 修改後同步更新 `specs/requirements.md`、`todo.md`、README 或 docs 中受影響內容。
 
 ## 3. 目錄與檔案規範
@@ -48,6 +49,7 @@
 - 修改 API schema 時同步更新 `docs/api-reference.md`、`docs/storage-format.md` 與 tests。
 - 修改 launcher 行為時同步跑 `python scripts/apsm_validate.py --project .`。
 - 修改前端 layout 時同步跑 Playwright desktop/mobile。
+- Playwright e2e 不得用 `page.route(...).fulfill(...)` 偽造專案自身 `/api` 成功回應來宣稱整合通過；若只測 UI 狀態，測試必須清楚命名為 fixture/contract 測試，且不得取代真 backend e2e。
 
 ## 7. 測試與打包規範
 
@@ -74,4 +76,4 @@ python scripts\project_launcher.py --package
 - 前端 dev server 是 Vite `127.0.0.1:5173`。
 - 後端預設是 FastAPI `127.0.0.1:8000`。
 - Vite 在後端未啟動時出現 `/api/projects` proxy ECONNREFUSED 是預期 fallback 行為，不代表 UI smoke 失敗。
-- `OPENAI_API_KEY` 不存在時，UI 可以 fallback 到 mock streaming；live provider 驗證必須另外確認 key。
+- `OPENAI_API_KEY` 不存在時，後端必須回報 provider configuration error；UI 不得用假串流把 live provider 失敗偽裝成成功。

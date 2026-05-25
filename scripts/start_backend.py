@@ -11,6 +11,12 @@ ROOT = Path(__file__).resolve().parents[1]
 API_ROOT = ROOT / "apps" / "api"
 
 
+def configure_stdio() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+
+
 def load_env_file(path: Path) -> None:
     if not path.exists():
         return
@@ -23,6 +29,7 @@ def load_env_file(path: Path) -> None:
 
 
 def main() -> None:
+    configure_stdio()
     load_env_file(ROOT / ".env")
     sys.path.insert(0, str(API_ROOT))
     host = os.environ.get("BACKEND_HOST") or os.environ.get("APP_BACKEND_HOST") or "127.0.0.1"

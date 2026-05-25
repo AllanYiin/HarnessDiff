@@ -40,7 +40,12 @@ async def stream_run(request: Request, run_id: str) -> StreamingResponse:
     except InvalidProjectIdError:
         raise HTTPException(status_code=400, detail="Invalid run id") from None
 
-    orchestrator = RunOrchestrator(get_store(request), request.app.state.llm_provider)
+    orchestrator = RunOrchestrator(
+        get_store(request),
+        request.app.state.llm_provider,
+        request.app.state.tool_runtime,
+        skill_store=request.app.state.skill_store,
+    )
 
     async def event_source():
         async for payload in orchestrator.stream_run(run):

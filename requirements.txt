@@ -4,3 +4,8 @@ pytest>=8.4.0
 httpx>=0.28.0
 openai>=1.82.0
 pydantic>=2.0.0
+PyYAML>=6.0
+jsonschema>=4.23
+
+--find-links vendor/wheels
+toolanything==0.5.0

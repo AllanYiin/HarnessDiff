@@ -66,7 +66,7 @@ Stage 5 analysis distinguishes between:
 
 Current Harness modules:
 
-- `context_manifest`
+- `context_summary`
 - `source_map`
 - `guardrails`
 - `output_contract`

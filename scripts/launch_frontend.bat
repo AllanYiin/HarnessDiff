@@ -1,5 +1,8 @@
 @echo off
 setlocal
+set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
+set "PYTHONLEGACYWINDOWSSTDIO="
 set "PROJECT_ROOT=%~dp0.."
 set "FRONTEND_DIR=%PROJECT_ROOT%\apps\web"
 if not exist "%PROJECT_ROOT%\logs" mkdir "%PROJECT_ROOT%\logs" >nul 2>nul

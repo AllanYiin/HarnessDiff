@@ -9,22 +9,29 @@
 ## 📌 SNAPSHOT — 當前狀態
 <!-- 這一整段每次 /devnote 會被覆寫，只反映「到目前為止的最新狀態」 -->
 
-**最後更新**：2026-05-23 12:28
+**最後更新**：2026-05-25 06:37
 
 ### 需求狀態
 - [x] Stage 0：localhost web app / FastAPI skeleton、README、env 樣板、storage/provider docs。
 - [x] Stage 1：本機 JSON project CRUD、schema version、atomic write、corrupt JSON repair report。
-- [x] Stage 2：雙 Pane Chat UI、整合/個別輸入模式、附件預覽、mock streaming、Playwright desktop/mobile 視覺 smoke。
-- [x] Stage 3：OpenAI Responses API streaming provider、run orchestration、SSE routes、前端串接已通過 fake provider、default model live provider、雙 pane route/SSE live 驗證。
+- [x] Stage 2：雙 Pane Chat UI、整合/個別輸入模式、附件預覽、附件讀取摘要、語音輸入、mock streaming、Playwright desktop/mobile 視覺 smoke。
+- [x] Stage 3：OpenAI Responses API streaming provider、tool/function-call round loop、run orchestration、SSE routes、前端串接已通過 fake provider、default model live provider、雙 pane route/SSE live 驗證。
 - [x] Stage 4：Harness Engine 與組態開關第一版完成；project config、run-level overrides、Harness-only instructions、UI toggles、input artifact traceability 均已接上。
 - [x] Stage 5：本回合與累計分析器第一版完成；analysis artifact、SSE `analysis_ready`、API retrieval、前端 summary metrics、current/cumulative usage 與 context sections 均已接上。
 - [x] Stage 6：整合/回歸/邊界測試完成；provider failure、invalid ids、lazy analysis rebuild、single-pane analysis、settings disclosure、analysis_ready e2e 均已納入。
 - [x] Stage 7：文件化與交付完成；README quick start、API reference、troubleshooting、specs/product-spec、specs/stage-plan、release checklist 與 docs audit 均已收尾。
 - [x] 一鍵安裝啟動機制：依 `vibe-coding-guidelines` 補 `project.config.json`、`AGENTS.md`、`specs/requirements.md`、`todo.md`、launcher generator、APSM validator、`run_app.*` 與 runtime metadata。
 - [x] Conversation controls：新增新對話、歷史對話 drawer、自動命名、transcript API、暫停執行，以及 Markdown render/copy raw Markdown。
+- [x] Harness tools：`tool_policy` profile 會取得 ToolAnything 標準 web/fs/data/read-only shell tools 與 `harness.subagent.run`；OpenAI provider 會執行 function calls 並把 outputs 回塞續跑。
+- [x] Web source citations：Harness web tool output 會自動帶 `citation_sources` / `citation_guidance`，`source_map` 指令要求 inline Markdown links 與 `Sources` 區塊。
+- [x] Composer input：迴紋針整合檔案/圖片匯入；支援 Ctrl+V 貼上檔案、txt/md 讀文字、csv 產生 DataFrame-style preview、Office/PDF metadata 摘要、圖片 browser preview、麥克風 Web Speech API 轉文字。
+- [x] Skill system：啟動/技能 API 會建立 `~/.harnessdiff`、`CLAUDE.md`、`AGENTS.md`、`agents.md`、`skills/`；UI 可檢視技能、匯入 zip/skill/folder、逐步揭露完整 `SKILL.md`。
+- [x] Skill context：新對話第一回合自動放入已安裝技能第一層 `name/description`；輸入框支援 `/skill-id` slash command，送出時載入對應完整 `SKILL.md` 作為本回合上下文。
 
 ### 未解問題
 - 本機 `npm` shim 壞掉，已改用 Corepack pnpm 的實際路徑或 `corepack pnpm`。
+- Office/PDF 深度文字抽取、CSV 真正 pandas DataFrame、圖片真正 PIL `Image.open(file)` 仍只是前端 metadata/preview 基礎接入；若要完整解析需新增後端 upload/parse endpoint。
+- Web Speech API 瀏覽器支援不一致，且會受麥克風權限影響；目前只有前端基礎接入與 Playwright mock 測試。
 
 ### 關鍵技術決策（當前有效）
 > 歷史上做過的、目前仍然成立的決策摘要。被推翻的決策不列。
@@ -41,6 +48,11 @@
 - **One-click launcher boundary**：`run_app.bat` / `run_app.command` / `run_app.sh` 皆由 `scripts/project_launcher.py` 生成；若啟動行為要改，先改 generator 再重產 wrapper。
 - **APSM source of truth**：`project.config.json` 宣告 `scene_b_shared_tool` + `web_app/separated/node_spa/python_api`，並以 `layout_variant=apps` 對齊既有 `apps/api`、`apps/web` 目錄。
 - **Project as conversation**：Chat MVP 不另建 conversation storage；Project metadata 是對話 metadata，runs/pane outputs 是 transcript 來源。
+- **Harness tool loop**：只有啟用 `tool_policy` 的 profile 會拿到 tools；provider 負責 function-call loop，route/orchestrator 保持 provider-neutral（詳見 HISTORY `[2026-05-25 06:37]`）。
+- **Web citation enrichment**：來源引用不改 API/schema，改在 web function output 回塞時附加 `citation_sources` 與 citation guidance（詳見 HISTORY `[2026-05-25 06:37]`）。
+- **Attachment context first**：附件目前不新增後端 binary upload schema；前端先將可讀摘要併入 prompt，保留後端解析擴充點（詳見 HISTORY `[2026-05-25 06:37]`）。
+- **User-level skill home**：技能存放在 `~/.harnessdiff/skills`，可用 `HARNESSDIFF_HOME` 覆寫；新對話只自動放第一層清單，完整 `SKILL.md` 只在 UI 選取或 slash command 時載入（詳見 HISTORY `[2026-05-25 06:37]`）。
+- **Skill imports use JSON base64**：zip/skill/folder 匯入走 JSON base64，避免新增 multipart 依賴；zip/folder import 必須 path traversal 防護（詳見 HISTORY `[2026-05-25 06:37]`）。
 
 ### 已知地雷（仍需注意）
 > 踩過且未來仍可能重踩的坑的一句話提醒。已徹底不可能重現的不列。
@@ -57,6 +69,10 @@
 - **Windows launcher 前端路徑**：曾產生相對路徑二次 `cd apps\web` 的風險；目前 generator 已改用 `%~dp0apps\web` 絕對路徑。
 - **Windows cmd quoting**：`cmd /k """%PYEXE%"" ..."` 會把 venv `python.exe` 誤當 Python 腳本讀入；Windows launcher 目前改用 `scripts\launch_backend.bat` / `scripts\launch_frontend.bat` helper，避免巢狀 `cmd /k` 引號。
 - **E2E backend leakage**：若本機 8000 有真實 backend，原本 fallback smoke 會拿到 live output；離線 smoke 需明確 abort `/api/**`。
+- **PowerShell `date` alias**：`date "+%Y-%m-%d %H:%M"` 在 PowerShell 會被當成 `Get-Date -Date` 而失敗；用 `Get-Date -Format "yyyy-MM-dd HH:mm"`。
+- **compileall / tsbuildinfo sandbox writes**：預設 `__pycache__`、`C:\tmp`、`apps/web/tsconfig.tsbuildinfo` 或 Vite temp 寫入可能被 sandbox 擋；Python 可用 repo 內 `.compile_pycache`，前端檢查通常需 escalated。
+- **Import-time home writes**：`app = create_app()` 不可在 import 階段立即寫 `~/.harnessdiff`，否則測試 collection 會因 sandbox 權限炸掉；home 初始化需 lazy ensure。
+- **Zip/folder skill import path traversal**：匯入相對路徑不可信任，必須拒絕絕對路徑、空 path parts 與 `..`。
 
 ---
 
@@ -324,3 +340,54 @@
 
 ### 備註
 - 驗證結果：`python -m pytest` 14 passed、TypeScript build、Vitest、Vite build、Playwright desktop/mobile 10 tests passed。
+
+---
+
+## [2026-05-25 06:37] Harness tools, source citations, attachments, skills, and slash commands
+
+### 本次做了什麼（增量）
+補齊 Harness 端對話核心能力：`tool_policy` 可啟用 ToolAnything 風格工具、web/fs/data/read-only shell 與 `harness.subagent.run`；OpenAI Responses provider 可把 function-call 結果回送模型並完成多輪 tool loop。前端 Composer 新增夾檔、貼上檔案/圖片、文字與表格預覽、Office/PDF metadata preview、圖片 data URL preview、麥克風語音輸入；技能系統新增 `~/.harnessdiff` 初始化、`CLAUDE.md`、`AGENTS.md`、`agents.md`、`skills/`、技能列表/匯入 API、UI 技能面板、新對話第一層技能 context 注入，以及文字方塊內 `/skill-id` 斜線指令載入完整 `SKILL.md`。同時修正 Harness 上網查資料未自動來源引述：web 工具輸出會附 `citation_sources` 與 `citation_guidance`，最終回答被要求輸出 inline Markdown links 與 Sources 區塊。
+
+### 本次重大技術決策
+- **Harness 工具迴圈只由 `tool_policy` 顯式開啟**
+  - 內容：OpenAI provider 負責 function-call loop；`ChatToolRuntime`/`SubagentToolRuntime` 只在 backend policy 允許時註冊工具。
+  - 理由：避免一般對話無意暴露 filesystem/shell/subagent 能力，也讓不同模式可控制工具面。
+  - 影響：未來新增工具要先定義 policy、schema、runtime handler 與測試，不應直接在 prompt 內假裝可用。
+- **來源引述由 web 工具輸出補強，不改 artifact schema**
+  - 內容：web search 結果整理成 `citation_sources`、`citation_guidance`，由 provider 指示模型在回答中使用 Markdown 連結和 Sources。
+  - 理由：變更面小，能先解決「有查資料但沒有引述」；不需要立刻重設 run/artifact 資料模型。
+  - 影響：引用品質仍依賴模型遵循 guidance；若未來要強制驗證，可再加 response post-check。
+- **附件先進入對話 context，不先設計 binary upload contract**
+  - 內容：前端先用 `FileReader` 解析文字、CSV preview、Office/PDF metadata、image data URL，送入 message context。
+  - 理由：可快速支援 Ctrl+V 與迴紋針的基礎體驗，並保持現有 chat API 向前相容。
+  - 影響：大型檔案、真正 pandas DataFrame、PIL Image 物件與 Office/PDF 深度抽取仍需後端 upload/parse endpoint。
+- **技能採 user home store，分成第一層 context 與完整揭露**
+  - 內容：`~/.harnessdiff/skills` 保存技能；新對話只放 `name/description`，使用 slash command 或技能操作時才取完整 `SKILL.md`。
+  - 理由：符合 progressive disclosure，避免每次新對話塞入所有技能全文。
+  - 影響：技能匯入與讀取都要防 path traversal，前端需要區分摘要列表與 full skill payload。
+- **技能匯入用 JSON base64，不先導入 multipart**
+  - 內容：zip/skill 檔和資料夾匯入都經由 JSON request，資料夾以 `{path, contentBase64}` entries 表示。
+  - 理由：沿用既有 `fetchJson` 風格，減少 frontend/backend 同時新增 multipart parser 的成本。
+  - 影響：大技能包未來可能需要 multipart 或 streaming upload；目前適合中小型 skill。
+
+### 本次失敗經驗與填坑
+- **PowerShell `date "+%Y-%m-%d %H:%M"` 不是 GNU date**
+  - 試過無效：直接執行使用者流程中的 `date "+%Y-%m-%d %H:%M"`，PowerShell 把 `date` 當 `Get-Date` alias，導致 positional parameter 錯誤。
+  - 最終解法：改用 `Get-Date -Format "yyyy-MM-dd HH:mm"` 取得本地時間戳。
+  - 根因：同名命令在 PowerShell 與 Bash 語意不同，跨 shell 指令不能假設 GNU coreutils 行為。
+- **import-time 寫入 `~/.harnessdiff` 會讓測試污染使用者 home**
+  - 試過無效：在 module import 階段立即初始化 HarnessDiff home。
+  - 最終解法：改為 lazy ensure，只在 API/store 實際需要時建立目錄與預設檔。
+  - 根因：import side effect 會破壞測試隔離，也讓單純匯入模組變成有狀態的 filesystem operation。
+- **frontend build/test 會寫 sandbox 外 cache 或 tsbuildinfo**
+  - 試過無效：部分 TypeScript/Vite/Playwright 指令在受限 sandbox 直接執行。
+  - 最終解法：依流程對必要 build/test 指令申請 escalation；Python compileall 改用 `-X pycache_prefix=.compile_pycache`。
+  - 根因：工具鏈預設輸出不一定落在 repo 可寫範圍，尤其是 node/vite cache 與 Python pycache。
+- **zip/folder skill 匯入必須顯式防 path traversal**
+  - 試過無效：不能只信任 zip entry 或 folder entry 的相對路徑。
+  - 最終解法：backend 檢查 entry path、拒絕絕對路徑與 `..` 跳脫，並驗證技能根需要可辨識 manifest/`SKILL.md`。
+  - 根因：匯入功能本質上是使用者提供壓縮檔/資料夾寫入 home 目錄，必須先限制寫入邊界。
+
+### 備註
+- 主要驗證結果：`python -m pytest` 42 passed；`python -X pycache_prefix=.compile_pycache -m compileall apps\api` 通過；TypeScript build 通過；Vitest 12 passed；Vite build 通過；Playwright 26 passed；`python scripts\apsm_validate.py --project .` valid。
+- 仍需補強：Office/PDF 深度解析、真正 pandas DataFrame/PIL 物件、後端 binary upload contract、Web Speech API 權限/瀏覽器支援提示，以及 web citation 的強制 post-check。

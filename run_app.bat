@@ -1,5 +1,8 @@
 @echo off
 setlocal ENABLEDELAYEDEXPANSION
+set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
+set "PYTHONLEGACYWINDOWSSTDIO="
 
 REM =========================================
 REM One-click install / run (stable)

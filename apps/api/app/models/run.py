@@ -2,14 +2,10 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.models.harness_modules import normalize_harness_modules
 from app.models.project import utc_now_iso
-
-
-class PaneId(str, Enum):
-    no_harness = "NoHarness"
-    harness = "Harness"
 
 
 class InputMode(str, Enum):
@@ -25,6 +21,38 @@ class RunStatus(str, Enum):
     cancelled = "cancelled"
 
 
+class ProfileConfig(BaseModel):
+    id: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$")
+    label: str = Field(min_length=1, max_length=120)
+    harness_modules: dict[str, bool] = Field(default_factory=dict)
+
+    @field_validator("harness_modules", mode="before")
+    @classmethod
+    def normalize_module_names(cls, value):
+        return normalize_harness_modules(value if isinstance(value, dict) else {})
+
+
+def default_profiles() -> list[ProfileConfig]:
+    return [
+        ProfileConfig(id="baseline", label="NoHarness", harness_modules={}),
+        ProfileConfig(
+            id="harness",
+            label="Harness",
+            harness_modules={
+                "context_summary": True,
+                "source_map": True,
+                "guardrails": True,
+                "output_contract": True,
+                "planning_preamble": False,
+                "tool_policy": True,
+                "memory_selection": True,
+                "post_answer_critique": True,
+                "token_budgeter": True,
+            },
+        ),
+    ]
+
+
 class RunCreate(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
 
@@ -32,8 +60,7 @@ class RunCreate(BaseModel):
     input_mode: InputMode = InputMode.integrated
     model: str = Field(default="gpt-5.4-mini", min_length=1)
     reasoning_effort: str = Field(default="medium", min_length=1)
-    target_panes: list[PaneId] = Field(default_factory=lambda: [PaneId.no_harness, PaneId.harness])
-    harness_modules: dict[str, bool] | None = None
+    profiles: list[ProfileConfig] = Field(default_factory=default_profiles, min_length=1)
 
 
 class RunDocument(BaseModel):
@@ -46,8 +73,7 @@ class RunDocument(BaseModel):
     input_mode: InputMode
     model: str
     reasoning_effort: str
-    target_panes: list[PaneId]
-    harness_modules: dict[str, bool] = Field(default_factory=dict)
+    profiles: list[ProfileConfig]
     status: RunStatus = RunStatus.submitted
     prompt: str
     created_at: str
@@ -61,7 +87,7 @@ def new_run_document(
     project_id: str,
     turn_index: int,
     payload: RunCreate,
-    harness_modules: dict[str, bool] | None = None,
+    profiles: list[ProfileConfig] | None = None,
 ) -> RunDocument:
     now = utc_now_iso()
     return RunDocument(
@@ -72,8 +98,7 @@ def new_run_document(
         input_mode=payload.input_mode,
         model=payload.model,
         reasoning_effort=payload.reasoning_effort,
-        target_panes=payload.target_panes,
-        harness_modules=harness_modules or {},
+        profiles=profiles or payload.profiles,
         prompt=payload.prompt,
         created_at=now,
         updated_at=now,

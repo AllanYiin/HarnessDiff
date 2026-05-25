@@ -90,6 +90,7 @@ Copy `.env.example` to `.env` or set environment variables in the shell.
 Important variables:
 
 - `HARNESSDIFF_DATA_DIR`: local JSON storage root, default `./data`
+- `HARNESSDIFF_HOME`: user-level HarnessDiff home, default `~/.harnessdiff`
 - `OPENAI_API_KEY`: required for live OpenAI streaming
 - `OPENAI_DEFAULT_MODEL`: documented default model
 - `OPENAI_DEFAULT_REASONING_EFFORT`: documented default reasoning effort
@@ -103,7 +104,7 @@ The backend exposes run streaming through:
 - `POST /api/projects/{project_id}/runs`
 - `GET /api/runs/{run_id}/stream`
 
-The first provider is OpenAI Responses API streaming. The frontend attempts the local API first and falls back to mock streaming when the backend is not running, so UI smoke tests can run without an API key.
+The first provider is OpenAI Responses API streaming. The frontend calls the local API and surfaces backend/provider failures instead of substituting mock streaming. UI-only fixture tests must not be treated as live backend verification.
 
 See [docs/api-reference.md](docs/api-reference.md) for endpoint details.
 
@@ -124,7 +125,7 @@ Each project gets `config/harness.default.json`. A run can override individual H
 
 The current module switches are:
 
-- `context_manifest`
+- `context_summary`
 - `source_map`
 - `guardrails`
 - `output_contract`
@@ -135,6 +136,16 @@ The current module switches are:
 - `token_budgeter`
 
 These switches affect only the `Harness` pane. `NoHarness` keeps the direct baseline instruction.
+
+When `source_map` and `tool_policy` are enabled together, Harness web tool results are carried into final answer synthesis with citation guidance so web-supported claims can include inline Markdown links and a short `Sources` section.
+
+## Skills
+
+HarnessDiff creates `~/.harnessdiff` on demand with `CLAUDE.md`, `AGENTS.md`, `agents.md`, and `skills/`. The UI skill panel lists installed skills from `~/.harnessdiff/skills`, imports `.zip`, `.skill`/`.md`, or folder uploads, and reveals full `SKILL.md` content only after a skill is selected.
+
+On the first run in a new conversation, HarnessDiff adds only the first layer of installed skills to provider context: `name` and `description`.
+
+In the composer, typing `/` opens installed skill suggestions. Selecting or typing `/skill-id` in a prompt loads that skill's full `SKILL.md` into the current run context.
 
 ## Repository Map
 
@@ -177,4 +188,4 @@ node node_modules\@playwright\test\cli.js test
 
 See `docs/release-checklist.md` for the release checklist.
 
-Backend dependencies are listed in `requirements.txt`.
+Backend dependencies are listed in `requirements.txt`. ToolAnything is installed from the local wheel under `vendor/wheels` via the `--find-links` entry in `requirements.txt`.
