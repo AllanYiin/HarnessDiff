@@ -50,10 +50,14 @@ class RunOrchestrator:
         async def run_profile(profile) -> None:
             try:
                 instructions = build_instructions(profile.label, profile.harness_modules)
+                has_harness_context = any(
+                    bool(enabled) for enabled in profile.harness_modules.values()
+                )
                 if self.skill_store is not None:
-                    agents_context = self.skill_store.agents_context()
-                    if agents_context:
-                        instructions = f"{instructions}\n\n{agents_context}"
+                    if has_harness_context:
+                        agents_context = self.skill_store.agents_context()
+                        if agents_context:
+                            instructions = f"{instructions}\n\n{agents_context}"
                     if run.turn_index == 0:
                         skill_context = self.skill_store.context_manifest()
                         if skill_context:

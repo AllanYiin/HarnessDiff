@@ -216,7 +216,7 @@ textarea:disabled {
   background: var(--color-surface);
   box-shadow: 0 18px 44px rgb(15 23 42 / 0.16);
   padding: var(--space-4);
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .skillPanelHeader,
@@ -257,13 +257,74 @@ textarea:disabled {
   font-size: 13px;
 }
 
+.skillTabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-1);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 3px;
+}
+
+.skillTab {
+  min-width: 0;
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 13px;
+}
+
+.skillTab[aria-selected="true"] {
+  background: #ffffff;
+  color: var(--color-text);
+  box-shadow: 0 1px 3px rgb(15 23 42 / 0.12);
+}
+
+.skillTab strong {
+  min-width: 22px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: var(--color-muted);
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+
+.skillTab[aria-selected="true"] strong {
+  background: #ccfbf1;
+  color: #0f766e;
+}
+
+.skillPanelBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.skillTabPanel {
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: var(--space-3);
+}
+
+.skillTabPanel[hidden] {
+  display: none;
+}
+
 .skillList {
   min-height: 0;
-  max-height: 180px;
   display: grid;
   align-content: start;
   gap: var(--space-2);
-  overflow-y: auto;
 }
 
 .skillItem {
@@ -306,7 +367,7 @@ textarea:disabled {
 }
 
 .skillDetail pre {
-  max-height: 190px;
+  max-height: 280px;
   margin: 0;
   overflow: auto;
   border: 1px solid var(--color-border);
@@ -315,13 +376,6 @@ textarea:disabled {
   padding: var(--space-3);
   font-size: 12px;
   white-space: pre-wrap;
-}
-
-.subagentSection {
-  display: grid;
-  gap: var(--space-3);
-  border-top: 1px solid var(--color-border);
-  padding-top: var(--space-3);
 }
 
 .subagentHeader,

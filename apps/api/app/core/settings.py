@@ -15,8 +15,11 @@ def resolve_harnessdiff_home(raw_home: str | os.PathLike[str] | None = None) -> 
         return default_home.expanduser().resolve()
 
     resolved_home = Path(configured_home).expanduser().resolve()
-    legacy_project_home = (REPO_ROOT / ".harnessdiff").resolve()
-    if resolved_home == legacy_project_home:
+    legacy_project_homes = {
+        REPO_ROOT.resolve(),
+        (REPO_ROOT / ".harnessdiff").resolve(),
+    }
+    if resolved_home in legacy_project_homes:
         return default_home.expanduser().resolve()
     return resolved_home
 

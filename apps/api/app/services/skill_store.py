@@ -8,7 +8,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from app.core.settings import settings
+from app.core.settings import resolve_harnessdiff_home, settings
 from app.models.skill import SkillImportFile, SubagentCreateRequest, SubagentSummary, SkillSummary
 from app.services.subagent_definitions import (
     DEFAULT_SUBAGENTS,
@@ -37,6 +37,9 @@ class SubagentDefinitionError(ValueError):
 @dataclass(frozen=True)
 class SkillStore:
     home_dir: Path = settings.harnessdiff_home
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "home_dir", resolve_harnessdiff_home(self.home_dir))
 
     @property
     def skills_dir(self) -> Path:

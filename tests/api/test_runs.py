@@ -284,18 +284,36 @@ def test_every_turn_includes_harnessdiff_agents_md_context(tmp_path) -> None:
                 "input_mode": "integrated",
                 "model": "fake-model",
                 "reasoning_effort": "medium",
-                "profiles": [{"id": "baseline", "label": "NoHarness", "harness_modules": {}}],
+                "profiles": [
+                    {"id": "baseline", "label": "NoHarness", "harness_modules": {}},
+                    {
+                        "id": "harness",
+                        "label": "Harness",
+                        "harness_modules": {"context_summary": True},
+                    },
+                ],
             },
         ).json()
         with client.stream("GET", f"/api/runs/{run['id']}/stream") as response:
             assert response.status_code == 200
             _ = "".join(response.iter_text())
 
-    assert len(provider.requests) == 2
+    assert len(provider.requests) == 4
+    baseline_requests = [request for request in provider.requests if request.profile_id == "baseline"]
+    harness_requests = [request for request in provider.requests if request.profile_id == "harness"]
+    assert len(baseline_requests) == 2
+    assert len(harness_requests) == 2
+    assert all(
+        "HarnessDiff AGENTS.md instructions" not in request.instructions
+        for request in baseline_requests
+    )
+    assert all("Always preserve local policy." not in request.instructions for request in baseline_requests)
     assert all(
         "HarnessDiff AGENTS.md instructions" in request.instructions
         and "Always preserve local policy." in request.instructions
-        for request in provider.requests
+        and "專案定位" not in request.instructions
+        and "修改後同步更新" not in request.instructions
+        for request in harness_requests
     )
 
 
