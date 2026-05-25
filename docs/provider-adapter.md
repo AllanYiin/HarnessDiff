@@ -28,7 +28,7 @@ When `LLMRequest.tools_enabled` is true, the OpenAI provider also sends the Harn
 
 When a standard web tool returns URLs, the provider enriches the returned `function_call_output` with `citation_sources` and `citation_guidance`. This keeps source attribution in the final synthesis context without changing the public SSE or storage schema.
 
-`harness.subagent.run` is a chat-local function tool. It runs one fixed backend subagent as an isolated provider request, disables nested tools for that subagent, writes subagent artifacts under the caller profile, and returns the subagent text as function output to the manager model. `multi_tool_use.parallel` is also chat-local and can concurrently invoke only tools that are already allowed for the current profile.
+`harness.subagent.run` is a chat-local function tool. It loads enabled definitions from `~/.harnessdiff/agents/`, runs the selected subagent as an isolated ephemeral provider request, disables nested tools for that subagent, writes subagent artifacts under the caller profile, and returns the subagent text as function output to the manager model. `multi_tool_use.parallel` is also chat-local and can concurrently invoke only tools that are already allowed for the current profile.
 
 ## Implemented Stage 3 Boundary
 
@@ -96,7 +96,7 @@ Analysis is intentionally outside the provider adapter. After a run completes, `
 
 The analyzer writes `analysis/analysis.json` and emits an `analysis_ready` SSE payload before `run_completed`. It does not call an LLM. Provider-reported usage remains the source of truth for billed token numbers; context section token counts are only rough structural estimates.
 
-Subagent token usage is tracked separately from the manager profile usage and is exposed as both per-subagent usage and caller-level rollup usage in analysis. This keeps the original Harness vs NoHarness comparison stable while still showing the full cost of delegated work.
+Subagent token usage is tracked separately from the manager profile usage and is exposed as both per-subagent usage and caller-level rollup usage in analysis. The subagent instance is discarded after the tool call, but `input.json`, `output.json`, `events.jsonl`, and `usage.json` remain under the caller profile so the full delegated cost is still visible.
 
 If any pane raises a provider error, `RunOrchestrator` writes the pane error event, marks the run `failed`, emits `run_failed`, and does not write analysis for that run. This prevents failed partial output from being reported as a complete comparison.
 

@@ -113,6 +113,33 @@ export type SkillDetail = {
   content: string;
 };
 
+export type SubagentSummary = {
+  id: string;
+  label: string;
+  description: string;
+  model: string;
+  reasoning_effort: string;
+  max_output_chars: number;
+  enabled: boolean;
+  path: string;
+};
+
+export type SubagentListResponse = {
+  agents_dir: string;
+  subagents: SubagentSummary[];
+};
+
+export type SubagentCreatePayload = {
+  id: string;
+  label: string;
+  description: string;
+  instructions: string;
+  model: string;
+  reasoning_effort: string;
+  max_output_chars: number;
+  enabled: boolean;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -354,6 +381,26 @@ export async function importSkillFolder(files: FileList): Promise<SkillSummary> 
     throw new Error(await responseErrorMessage(response, "匯入技能資料夾失敗"));
   }
   return (await response.json()).skill;
+}
+
+export async function listSubagents(): Promise<SubagentListResponse> {
+  const response = await fetch("/api/subagents");
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, "載入 Subagents 失敗"));
+  }
+  return response.json();
+}
+
+export async function createSubagent(payload: SubagentCreatePayload): Promise<SubagentSummary> {
+  const response = await fetch("/api/subagents", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, "新增 Subagent 失敗"));
+  }
+  return (await response.json()).subagent;
 }
 
 async function fileToBase64(file: File): Promise<string> {

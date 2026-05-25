@@ -88,7 +88,9 @@ def _sse_events(body: str) -> list[dict]:
 
 def test_run_stream_writes_profile_outputs_usage_and_harnessable_trace(tmp_path) -> None:
     provider = FakeProvider()
-    client = TestClient(create_app(data_dir=tmp_path, llm_provider=provider))
+    client = TestClient(
+        create_app(data_dir=tmp_path, harnessdiff_home=tmp_path / ".harnessdiff", llm_provider=provider)
+    )
     project_id = client.post("/api/projects", json={"name": "Streaming"}).json()["id"]
 
     create_response = client.post(
@@ -187,7 +189,9 @@ def test_run_stream_writes_profile_outputs_usage_and_harnessable_trace(tmp_path)
 
 def test_run_applies_profile_level_harness_modules_to_instructions(tmp_path) -> None:
     provider = FakeProvider()
-    client = TestClient(create_app(data_dir=tmp_path, llm_provider=provider))
+    client = TestClient(
+        create_app(data_dir=tmp_path, harnessdiff_home=tmp_path / ".harnessdiff", llm_provider=provider)
+    )
     project_id = client.post("/api/projects", json={"name": "Profile modules"}).json()["id"]
 
     create_response = client.post(
@@ -259,9 +263,47 @@ def test_first_turn_includes_available_skill_first_layer_context(tmp_path) -> No
     assert "demo-skill: Demo skill description" in provider.requests[0].instructions
 
 
+def test_every_turn_includes_harnessdiff_agents_md_context(tmp_path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "AGENTS.md").write_text(
+        "# Local agents instructions\nAlways preserve local policy.",
+        encoding="utf-8",
+    )
+    provider = FakeProvider()
+    client = TestClient(
+        create_app(data_dir=tmp_path / "data", harnessdiff_home=home, llm_provider=provider)
+    )
+    project_id = client.post("/api/projects", json={"name": "Agents context"}).json()["id"]
+
+    for prompt in ("first", "second"):
+        run = client.post(
+            f"/api/projects/{project_id}/runs",
+            json={
+                "prompt": prompt,
+                "input_mode": "integrated",
+                "model": "fake-model",
+                "reasoning_effort": "medium",
+                "profiles": [{"id": "baseline", "label": "NoHarness", "harness_modules": {}}],
+            },
+        ).json()
+        with client.stream("GET", f"/api/runs/{run['id']}/stream") as response:
+            assert response.status_code == 200
+            _ = "".join(response.iter_text())
+
+    assert len(provider.requests) == 2
+    assert all(
+        "HarnessDiff AGENTS.md instructions" in request.instructions
+        and "Always preserve local policy." in request.instructions
+        for request in provider.requests
+    )
+
+
 def test_legacy_context_manifest_module_is_normalized(tmp_path) -> None:
     provider = FakeProvider()
-    client = TestClient(create_app(data_dir=tmp_path, llm_provider=provider))
+    client = TestClient(
+        create_app(data_dir=tmp_path, harnessdiff_home=tmp_path / ".harnessdiff", llm_provider=provider)
+    )
     project_id = client.post("/api/projects", json={"name": "Legacy module"}).json()["id"]
 
     create_response = client.post(
@@ -297,7 +339,9 @@ def test_legacy_context_manifest_module_is_normalized(tmp_path) -> None:
 
 def test_analysis_accumulates_usage_per_profile_instance(tmp_path) -> None:
     provider = FakeProvider()
-    client = TestClient(create_app(data_dir=tmp_path, llm_provider=provider))
+    client = TestClient(
+        create_app(data_dir=tmp_path, harnessdiff_home=tmp_path / ".harnessdiff", llm_provider=provider)
+    )
     project_id = client.post("/api/projects", json={"name": "Cumulative analysis"}).json()["id"]
 
     run_ids = []
@@ -345,7 +389,13 @@ def test_analysis_accumulates_usage_per_profile_instance(tmp_path) -> None:
 
 
 def test_run_marks_failed_when_one_profile_provider_fails(tmp_path) -> None:
-    client = TestClient(create_app(data_dir=tmp_path, llm_provider=FailingHarnessProvider()))
+    client = TestClient(
+        create_app(
+            data_dir=tmp_path,
+            harnessdiff_home=tmp_path / ".harnessdiff",
+            llm_provider=FailingHarnessProvider(),
+        )
+    )
     project_id = client.post("/api/projects", json={"name": "Provider failure"}).json()["id"]
     run = client.post(
         f"/api/projects/{project_id}/runs",
@@ -371,7 +421,13 @@ def test_run_marks_failed_when_one_profile_provider_fails(tmp_path) -> None:
 
 
 def test_provider_error_event_message_is_streamed_and_persisted(tmp_path) -> None:
-    client = TestClient(create_app(data_dir=tmp_path, llm_provider=ErrorEventHarnessProvider()))
+    client = TestClient(
+        create_app(
+            data_dir=tmp_path,
+            harnessdiff_home=tmp_path / ".harnessdiff",
+            llm_provider=ErrorEventHarnessProvider(),
+        )
+    )
     project_id = client.post("/api/projects", json={"name": "Provider error event"}).json()["id"]
     run = client.post(
         f"/api/projects/{project_id}/runs",
@@ -471,7 +527,9 @@ def test_harness_subagent_tool_call_writes_artifacts_and_usage_rollup(tmp_path) 
         api_key="test",
         client_factory=lambda: openai_client,
     )
-    client = TestClient(create_app(data_dir=tmp_path, llm_provider=provider))
+    client = TestClient(
+        create_app(data_dir=tmp_path, harnessdiff_home=tmp_path / ".harnessdiff", llm_provider=provider)
+    )
     project_id = client.post("/api/projects", json={"name": "Subagent tool"}).json()["id"]
     run = client.post(
         f"/api/projects/{project_id}/runs",
@@ -536,9 +594,118 @@ def test_harness_subagent_tool_call_writes_artifacts_and_usage_rollup(tmp_path) 
     assert harness["subagents"]["researcher"]["current_turn_usage"]["total_tokens"] == 20
 
 
+def test_harness_subagent_tool_loads_custom_agent_definition_from_home(tmp_path) -> None:
+    home = tmp_path / "home"
+    agents_dir = home / "agents"
+    agents_dir.mkdir(parents=True)
+    (home / "AGENTS.md").write_text("# Local policy\n", encoding="utf-8")
+    (agents_dir / "analyst.md").write_text(
+        "---\n"
+        "id: analyst\n"
+        "label: Analyst\n"
+        "description: Analyze delegated evidence.\n"
+        "model: custom-model\n"
+        "reasoning_effort: low\n"
+        "max_output_chars: 1000\n"
+        "enabled: true\n"
+        "---\n"
+        "Custom analyst instructions.",
+        encoding="utf-8",
+    )
+    openai_client = FakeOpenAIClient(
+        [
+            [
+                FakeEvent(
+                    type="response.completed",
+                    response=FakeResponse(
+                        id="resp_tool",
+                        output=[
+                            {
+                                "type": "function_call",
+                                "name": "harness_subagent_run",
+                                "call_id": "call_subagent",
+                                "arguments": json.dumps(
+                                    {
+                                        "subagent_id": "analyst",
+                                        "task": "Check this",
+                                        "context": "Evidence A",
+                                    }
+                                ),
+                            }
+                        ],
+                    ),
+                )
+            ],
+            [
+                FakeEvent(type="response.output_text.delta", delta="custom notes"),
+                FakeEvent(
+                    type="response.completed",
+                    response=FakeResponse(
+                        id="resp_sub",
+                        output=[],
+                        usage={"input_tokens": 5, "output_tokens": 7, "total_tokens": 12},
+                    ),
+                ),
+            ],
+            [
+                FakeEvent(type="response.output_text.delta", delta="final"),
+                FakeEvent(
+                    type="response.completed",
+                    response=FakeResponse(
+                        id="resp_final",
+                        output=[],
+                        usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                    ),
+                ),
+            ],
+        ]
+    )
+    provider = OpenAIResponsesProvider(api_key="test", client_factory=lambda: openai_client)
+    client = TestClient(
+        create_app(
+            data_dir=tmp_path / "data",
+            harnessdiff_home=home,
+            llm_provider=provider,
+        )
+    )
+    project_id = client.post("/api/projects", json={"name": "Custom subagent"}).json()["id"]
+    run = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "delegate custom",
+            "input_mode": "integrated",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+            "profiles": [
+                {"id": "harness", "label": "Harness", "harness_modules": {"tool_policy": True}}
+            ],
+        },
+    ).json()
+
+    with client.stream("GET", f"/api/runs/{run['id']}/stream") as response:
+        assert response.status_code == 200
+        events = _sse_events("".join(response.iter_text()))
+
+    subagent_tool = next(
+        tool for tool in openai_client.calls[0]["tools"] if tool["name"] == "harness_subagent_run"
+    )
+    assert "analyst" in subagent_tool["parameters"]["properties"]["subagent_id"]["description"]
+    assert "Custom analyst instructions." in openai_client.calls[1]["instructions"]
+    tool_call = next(event for event in events if event["type"] == "tool_call")
+    assert tool_call["tool_call"]["subagent_id"] == "analyst"
+
+    analysis = client.get(f"/api/runs/{run['id']}/analysis").json()
+    harness = analysis["profiles"]["harness"]
+    assert harness["subagent_usage_total"]["total_tokens"] == 12
+    assert harness["caller_usage_total"]["total_tokens"] == 27
+    assert harness["subagents"]["analyst"]["current_turn_usage"]["total_tokens"] == 12
+
+
 def test_harnessable_block_stops_only_controlled_profile(tmp_path) -> None:
     provider = FakeProvider()
-    client = TestClient(create_app(data_dir=tmp_path, llm_provider=provider))
+    client = TestClient(
+        create_app(data_dir=tmp_path, harnessdiff_home=tmp_path / ".harnessdiff", llm_provider=provider)
+    )
     project_id = client.post("/api/projects", json={"name": "Harnessable block"}).json()["id"]
     run = client.post(
         f"/api/projects/{project_id}/runs",
@@ -565,7 +732,9 @@ def test_harnessable_block_stops_only_controlled_profile(tmp_path) -> None:
 
 
 def test_analysis_endpoint_can_build_missing_analysis_artifact(tmp_path) -> None:
-    client = TestClient(create_app(data_dir=tmp_path, llm_provider=FakeProvider()))
+    client = TestClient(
+        create_app(data_dir=tmp_path, harnessdiff_home=tmp_path / ".harnessdiff", llm_provider=FakeProvider())
+    )
     project_id = client.post("/api/projects", json={"name": "Lazy analysis"}).json()["id"]
     run = client.post(
         f"/api/projects/{project_id}/runs",
@@ -591,7 +760,9 @@ def test_analysis_endpoint_can_build_missing_analysis_artifact(tmp_path) -> None
 
 
 def test_run_routes_reject_invalid_or_missing_ids(tmp_path) -> None:
-    client = TestClient(create_app(data_dir=tmp_path, llm_provider=FakeProvider()))
+    client = TestClient(
+        create_app(data_dir=tmp_path, harnessdiff_home=tmp_path / ".harnessdiff", llm_provider=FakeProvider())
+    )
 
     assert client.get("/api/runs/../bad/stream").status_code == 404
     assert client.get("/api/runs/bad$id/stream").status_code == 400

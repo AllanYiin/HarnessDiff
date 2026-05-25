@@ -285,7 +285,7 @@ runs/{run_id}/analysis/analysis.json
 
 Profiles write `tool_names` to `input.json` when tools are available, and successful or failed tool calls are preserved as `tool_call` rows in `events.jsonl`. Harness chat profiles with `tool_policy` enabled include `standard.shell.bash`, `harness.subagent.run`, and `multi_tool_use.parallel`; NoHarness profiles omit those three while retaining standard web/fs/data tools. `harness.subagent.run` accepts `subagent_id`, `task`, and `context`, then returns the subagent result as a normal function tool output.
 
-Subagent tool calls additionally write:
+Subagent definitions are loaded from `~/.harnessdiff/agents/` when `harness.subagent.run` is invoked. Subagent instances are ephemeral and do not keep live state after the tool call, but their artifacts and token usage remain on disk. Subagent tool calls additionally write:
 
 ```text
 runs/{run_id}/{profile_id}/subagents/{subagent_id}/input.json

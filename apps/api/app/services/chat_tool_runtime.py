@@ -5,11 +5,12 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from app.services.subagent_definitions import DEFAULT_SUBAGENTS
 from app.services.subagent_runtime import (
     SUBAGENT_OPENAI_NAME,
     SUBAGENT_TOOL_NAME,
     SubagentToolRuntime,
-    subagent_openai_tool,
+    subagent_openai_tool_for_definitions,
 )
 from app.services.tool_runtime import ToolAnythingRuntime, _elapsed_ms, _json_summary
 
@@ -76,7 +77,8 @@ class ChatToolRuntime:
             self.standard_runtime,
         )
         if self.include_subagent:
-            tools.append(subagent_openai_tool())
+            definitions = getattr(self.subagent_runtime, "definitions", DEFAULT_SUBAGENTS)
+            tools.append(subagent_openai_tool_for_definitions(definitions))
         if self.include_parallel:
             tools.append(parallel_openai_tool())
         return tools

@@ -15,6 +15,7 @@ from app.services.chat_tool_runtime import ChatToolRuntime
 from app.services.context_builder import build_instructions
 from app.services.harnessable_control import HarnessableControlPlane
 from app.services.skill_store import SkillStore
+from app.services.subagent_definitions import DEFAULT_SUBAGENTS
 from app.services.subagent_runtime import SubagentToolRuntime
 from app.services.tool_runtime import ToolAnythingRuntime
 from app.storage.json_io import write_json_atomic
@@ -49,14 +50,23 @@ class RunOrchestrator:
         async def run_profile(profile) -> None:
             try:
                 instructions = build_instructions(profile.label, profile.harness_modules)
-                if run.turn_index == 0 and self.skill_store is not None:
-                    skill_context = self.skill_store.context_manifest()
-                    if skill_context:
-                        instructions = f"{instructions}\n\n{skill_context}"
+                if self.skill_store is not None:
+                    agents_context = self.skill_store.agents_context()
+                    if agents_context:
+                        instructions = f"{instructions}\n\n{agents_context}"
+                    if run.turn_index == 0:
+                        skill_context = self.skill_store.context_manifest()
+                        if skill_context:
+                            instructions = f"{instructions}\n\n{skill_context}"
                 conversation_messages = self.store.read_profile_conversation_messages(
                     run.project_id, profile.id, run.turn_index
                 )
                 has_full_tools = bool(profile.harness_modules.get("tool_policy", False))
+                subagent_definitions = (
+                    self.skill_store.subagent_definitions()
+                    if self.skill_store is not None
+                    else DEFAULT_SUBAGENTS
+                )
                 active_tool_runtime = (
                     ChatToolRuntime(
                         standard_runtime=self.tool_runtime,
@@ -65,6 +75,7 @@ class RunOrchestrator:
                             store=self.store,
                             run=run,
                             profile=profile,
+                            definitions=subagent_definitions,
                         ),
                         excluded_tool_names=()
                         if has_full_tools

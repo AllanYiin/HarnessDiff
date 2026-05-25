@@ -9,17 +9,21 @@ import { TopBar } from "./components/TopBar";
 import {
   createProject,
   createRun,
+  createSubagent,
   getProjectTranscript,
   getSkill,
   importSkillFile,
   importSkillFolder,
   listSkills,
   listProjects,
+  listSubagents,
   streamRun,
   updateProjectName,
   type AnalysisDocument,
   type ProjectSummary,
   type RunStreamEvent,
+  type SubagentCreatePayload,
+  type SubagentSummary,
   type SkillSummary
 } from "./api";
 import { attachmentPromptBlock, ingestFiles } from "./domain/fileIngestion";
@@ -109,6 +113,10 @@ export function App() {
   const [skillError, setSkillError] = useState("");
   const [selectedSkillId, setSelectedSkillId] = useState("");
   const [selectedSkillContent, setSelectedSkillContent] = useState("");
+  const [agentsDir, setAgentsDir] = useState("");
+  const [subagents, setSubagents] = useState<SubagentSummary[]>([]);
+  const [subagentsLoading, setSubagentsLoading] = useState(false);
+  const [creatingSubagent, setCreatingSubagent] = useState(false);
   const [profiles, setProfiles] = useState<ProfileInstance[]>(defaultProfiles);
   const [analysis, setAnalysis] = useState<AnalysisDocument | null>(null);
   const [integratedDraft, setIntegratedDraft] = useState("");
@@ -182,6 +190,21 @@ export function App() {
     }
   }
 
+  async function refreshSubagents() {
+    setSubagentsLoading(true);
+    try {
+      const response = await listSubagents();
+      setAgentsDir(response.agents_dir);
+      setSubagents(response.subagents);
+      return response.subagents;
+    } catch (error) {
+      setSkillError(errorMessage(error));
+      return [];
+    } finally {
+      setSubagentsLoading(false);
+    }
+  }
+
   useEffect(() => {
     let ignore = false;
     refreshProjects().then((loadedProjects) => {
@@ -195,6 +218,7 @@ export function App() {
       }
     });
     refreshSkills();
+    refreshSubagents();
 
     return () => {
       ignore = true;
@@ -240,6 +264,7 @@ export function App() {
   async function startNewConversation() {
     resetConversationState(null);
     refreshSkills();
+    refreshSubagents();
     try {
       const project = await createProject(newConversationName);
       setProjectId(project.id);
@@ -294,6 +319,20 @@ export function App() {
     } catch (error) {
       setSelectedSkillContent("");
       setSkillError(errorMessage(error));
+    }
+  }
+
+  async function handleCreateSubagent(payload: SubagentCreatePayload) {
+    setCreatingSubagent(true);
+    setSkillError("");
+    try {
+      await createSubagent(payload);
+      await refreshSubagents();
+    } catch (error) {
+      setSkillError(errorMessage(error));
+      throw error;
+    } finally {
+      setCreatingSubagent(false);
     }
   }
 
@@ -661,6 +700,7 @@ export function App() {
           setSkillsOpen((current) => !current);
           setHistoryOpen(false);
           refreshSkills();
+          refreshSubagents();
         }}
       />
       {historyOpen ? (
@@ -680,10 +720,15 @@ export function App() {
           importing={skillImporting}
           selectedSkillId={selectedSkillId}
           selectedSkillContent={selectedSkillContent}
+          agentsDir={agentsDir}
+          subagents={subagents}
+          subagentsLoading={subagentsLoading}
+          creatingSubagent={creatingSubagent}
           error={skillError}
           onImportFile={handleImportSkillFile}
           onImportFolder={handleImportSkillFolder}
           onSelectSkill={selectSkill}
+          onCreateSubagent={handleCreateSubagent}
         />
       ) : null}
       <section className="workspace" aria-label="HarnessDiff chat comparison">

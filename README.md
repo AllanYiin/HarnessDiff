@@ -141,7 +141,7 @@ When `source_map` and `tool_policy` are enabled together, Harness web tool resul
 
 ## Skills
 
-HarnessDiff creates `~/.harnessdiff` on demand with `CLAUDE.md`, `AGENTS.md`, `agents.md`, and `skills/`. The UI skill panel lists installed skills from `~/.harnessdiff/skills`, imports `.zip`, `.skill`/`.md`, or folder uploads, and reveals full `SKILL.md` content only after a skill is selected.
+HarnessDiff creates `~/.harnessdiff` at startup with `CLAUDE.md`, `AGENTS.md`, `agents.md`, `agents/`, and `skills/`. `AGENTS.md` is appended to provider instructions for every chat turn. The `agents/` folder stores editable subagent definition files; `harness.subagent.run` loads those definitions when invoked, runs the selected subagent as an ephemeral isolated provider request, and persists its token usage under the caller profile for analysis rollup. The UI skill panel lists installed skills from `~/.harnessdiff/skills`, imports `.zip`, `.skill`/`.md`, or folder uploads, and reveals full `SKILL.md` content only after a skill is selected.
 
 On the first run in a new conversation, HarnessDiff adds only the first layer of installed skills to provider context: `name` and `description`.
 

@@ -8,7 +8,7 @@ from app.main import create_app
 
 
 def test_project_crud_round_trip(tmp_path) -> None:
-    client = TestClient(create_app(data_dir=tmp_path))
+    client = TestClient(create_app(data_dir=tmp_path, harnessdiff_home=tmp_path / ".harnessdiff"))
 
     create_response = client.post("/api/projects", json={"name": "Chat comparison"})
 
@@ -45,7 +45,7 @@ def test_project_crud_round_trip(tmp_path) -> None:
 
 
 def test_invalid_project_id_is_rejected(tmp_path) -> None:
-    client = TestClient(create_app(data_dir=tmp_path))
+    client = TestClient(create_app(data_dir=tmp_path, harnessdiff_home=tmp_path / ".harnessdiff"))
 
     response = client.get("/api/projects/bad$id")
 
@@ -53,7 +53,7 @@ def test_invalid_project_id_is_rejected(tmp_path) -> None:
 
 
 def test_project_transcript_returns_runs_and_outputs(tmp_path) -> None:
-    client = TestClient(create_app(data_dir=tmp_path))
+    client = TestClient(create_app(data_dir=tmp_path, harnessdiff_home=tmp_path / ".harnessdiff"))
     project_id = client.post("/api/projects", json={"name": "Transcript"}).json()["id"]
     run = client.post(
         f"/api/projects/{project_id}/runs",
@@ -83,7 +83,7 @@ def test_project_transcript_returns_runs_and_outputs(tmp_path) -> None:
 
 
 def test_corrupt_project_writes_repair_report(tmp_path) -> None:
-    client = TestClient(create_app(data_dir=tmp_path))
+    client = TestClient(create_app(data_dir=tmp_path, harnessdiff_home=tmp_path / ".harnessdiff"))
     create_response = client.post("/api/projects", json={"name": "Corrupt me"})
     project_id = create_response.json()["id"]
     project_dir = tmp_path / "projects" / project_id

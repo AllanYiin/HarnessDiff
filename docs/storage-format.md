@@ -21,13 +21,17 @@ HarnessDiff also maintains a user-level home outside project JSON storage:
   CLAUDE.md
   AGENTS.md
   agents.md
+  agents/
+    researcher.md
+    critic.md
+    summarizer.md
   skills/
     {skill_id}/
       SKILL.md
       ...
 ```
 
-`HARNESSDIFF_HOME` can override this location. `skills/{skill_id}/SKILL.md` is parsed for the first-layer skill `name`, `description`, and optional `version`. New conversation context receives only that first layer; full skill content is read on demand through the skill API/UI.
+`HARNESSDIFF_HOME` can override this location. `AGENTS.md` is read into provider instructions for every chat turn. `agents/` contains editable subagent definition files; Markdown files use frontmatter for `id`, `label`, `description`, `model`, `reasoning_effort`, `max_output_chars`, and `enabled`, with the Markdown body as instructions. `skills/{skill_id}/SKILL.md` is parsed for the first-layer skill `name`, `description`, and optional `version`. New conversation context receives only that first layer; full skill content is read on demand through the skill API/UI.
 
 ## Project Document
 
@@ -132,7 +136,7 @@ Profile `input.json`:
 
 Tool call events are stored in `{profile_id}/events.jsonl` as provider events with `type: "tool_call"` and a raw payload containing the tool name, masked/truncated arguments, elapsed milliseconds, and either a result summary or structured error.
 
-Subagent calls are stored under the caller profile and do not replace the caller profile output:
+Subagent calls are created from the current `~/.harnessdiff/agents/` definitions when `harness.subagent.run` is invoked. They are ephemeral provider requests with tools disabled, and their artifacts are stored under the caller profile without replacing the caller profile output:
 
 ```text
 runs/{run_id}/{profile_id}/subagents/{subagent_id}/

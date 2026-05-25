@@ -6,7 +6,7 @@ from app.main import create_app
 
 
 def test_health_route_returns_stage0_metadata(tmp_path) -> None:
-    client = TestClient(create_app(data_dir=tmp_path))
+    client = TestClient(create_app(data_dir=tmp_path, harnessdiff_home=tmp_path / ".harnessdiff"))
 
     response = client.get("/api/health")
 

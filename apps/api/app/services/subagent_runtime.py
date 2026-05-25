@@ -9,6 +9,7 @@ from app.providers.base import LLMProvider, LLMRequest, ProviderEvent
 from app.services.subagent_definitions import (
     DEFAULT_SUBAGENTS,
     SubagentDefinition,
+    enabled_subagents,
     subagent_by_id,
 )
 from app.services.tool_runtime import _elapsed_ms, _json_summary, _truncate_jsonable
@@ -245,6 +246,14 @@ class SubagentToolRuntime:
 
 
 def subagent_openai_tool() -> dict[str, Any]:
+    return subagent_openai_tool_for_definitions(DEFAULT_SUBAGENTS)
+
+
+def subagent_openai_tool_for_definitions(
+    definitions: tuple[SubagentDefinition, ...]
+) -> dict[str, Any]:
+    ids = [definition.id for definition in enabled_subagents(definitions)]
+    id_text = ", ".join(ids) if ids else "(none)"
     return {
         "type": "function",
         "name": SUBAGENT_OPENAI_NAME,
@@ -257,7 +266,7 @@ def subagent_openai_tool() -> dict[str, Any]:
             "properties": {
                 "subagent_id": {
                     "type": "string",
-                    "description": "One of: researcher, critic, summarizer.",
+                    "description": f"One of: {id_text}.",
                 },
                 "task": {
                     "type": "string",

@@ -107,12 +107,14 @@ body {
   position: relative;
 }
 
+input,
 select,
 textarea,
 button {
   font: inherit;
 }
 
+input,
 select {
   min-width: 132px;
   height: 34px;
@@ -121,6 +123,11 @@ select {
   background: #ffffff;
   color: var(--color-text);
   padding: 0 var(--space-2);
+}
+
+input {
+  width: 100%;
+  min-width: 0;
 }
 
 button {
@@ -201,15 +208,15 @@ textarea:disabled {
   z-index: 24;
   width: min(520px, calc(100vw - 32px));
   max-height: min(620px, calc(100vh - var(--topbar-height) - var(--composer-height) - 24px));
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   gap: var(--space-3);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-panel);
   background: var(--color-surface);
   box-shadow: 0 18px 44px rgb(15 23 42 / 0.16);
   padding: var(--space-4);
-  overflow: hidden;
+  overflow-y: auto;
 }
 
 .skillPanelHeader,
@@ -252,6 +259,7 @@ textarea:disabled {
 
 .skillList {
   min-height: 0;
+  max-height: 180px;
   display: grid;
   align-content: start;
   gap: var(--space-2);
@@ -307,6 +315,98 @@ textarea:disabled {
   padding: var(--space-3);
   font-size: 12px;
   white-space: pre-wrap;
+}
+
+.subagentSection {
+  display: grid;
+  gap: var(--space-3);
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-3);
+}
+
+.subagentHeader,
+.subagentItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.subagentHeader {
+  justify-content: space-between;
+}
+
+.subagentHeader div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.subagentHeader span,
+.subagentItem span,
+.subagentItem p {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.subagentHeader span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagentList {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.subagentItem {
+  align-items: flex-start;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px 12px;
+}
+
+.subagentItem svg {
+  flex: 0 0 auto;
+  color: var(--color-harness);
+  margin-top: 2px;
+}
+
+.subagentItem div,
+.subagentItem strong,
+.subagentItem span,
+.subagentItem p {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.subagentItem div {
+  display: grid;
+  gap: 2px;
+}
+
+.subagentItem p {
+  margin: 2px 0 0;
+}
+
+.subagentForm,
+.subagentFormGrid {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.subagentFormGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.subagentForm label {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-1);
+  color: var(--color-muted);
+  font-size: 12px;
 }
 
 .historyHeader {
@@ -987,6 +1087,7 @@ textarea {
 }
 
 textarea:focus,
+input:focus,
 button:focus-visible,
 select:focus {
   outline: 2px solid #93c5fd;
@@ -1099,9 +1200,14 @@ select:focus {
   }
 
   .skillPanelHeader,
-  .skillActions {
+  .skillActions,
+  .subagentHeader {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .subagentFormGrid {
+    grid-template-columns: 1fr;
   }
 
   .toggleGrid {

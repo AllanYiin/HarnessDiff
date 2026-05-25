@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createProject, createRun, getProjectTranscript, listProjects } from "./api";
+import {
+  createProject,
+  createRun,
+  createSubagent,
+  getProjectTranscript,
+  listProjects,
+  listSubagents
+} from "./api";
 
 function mockJsonResponse(body: unknown, ok = true, status = 200) {
   const response = {
@@ -99,5 +106,69 @@ describe("api response normalization", () => {
         }
       ]
     });
+  });
+
+  it("lists and creates subagent definitions through the subagents API", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        mockJsonResponse({
+          agents_dir: "C:/home/.harnessdiff/agents",
+          subagents: [
+            {
+              id: "researcher",
+              label: "Researcher",
+              description: "Research",
+              model: "gpt-5.4-mini",
+              reasoning_effort: "medium",
+              max_output_chars: 4000,
+              enabled: true,
+              path: "researcher.md"
+            }
+          ]
+        })
+      )
+      .mockResolvedValueOnce(
+        mockJsonResponse(
+          {
+            subagent: {
+              id: "fact_checker",
+              label: "Fact Checker",
+              description: "",
+              model: "gpt-5.4-mini",
+              reasoning_effort: "low",
+              max_output_chars: 4000,
+              enabled: true,
+              path: "fact_checker.md"
+            }
+          },
+          true,
+          201
+        )
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(listSubagents()).resolves.toMatchObject({
+      agents_dir: "C:/home/.harnessdiff/agents",
+      subagents: [{ id: "researcher" }]
+    });
+    await expect(
+      createSubagent({
+        id: "fact_checker",
+        label: "Fact Checker",
+        description: "",
+        instructions: "Check claims.",
+        model: "gpt-5.4-mini",
+        reasoning_effort: "low",
+        max_output_chars: 4000,
+        enabled: true
+      })
+    ).resolves.toMatchObject({ id: "fact_checker" });
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/subagents");
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/subagents",
+      expect.objectContaining({ method: "POST" })
+    );
   });
 });

@@ -26,6 +26,9 @@ def test_create_app_initializes_harnessdiff_home(tmp_path) -> None:
     assert (home / "CLAUDE.md").exists()
     assert (home / "AGENTS.md").exists()
     assert (home / "agents.md").exists()
+    assert (home / "agents" / "researcher.md").exists()
+    assert (home / "agents" / "critic.md").exists()
+    assert (home / "agents" / "summarizer.md").exists()
     assert body["skills"] == []
 
 
@@ -94,3 +97,43 @@ def test_import_folder_requires_skill_md_and_lists_summary(tmp_path) -> None:
         }
     ]
 
+
+def test_create_subagent_definition_and_list_it(tmp_path) -> None:
+    client = TestClient(create_app(data_dir=tmp_path / "data", harnessdiff_home=tmp_path / "home"))
+
+    response = client.post(
+        "/api/subagents",
+        json={
+            "id": "fact_checker",
+            "label": "Fact Checker",
+            "description": "Check claims against provided evidence.",
+            "instructions": "Return only supported and unsupported claims.",
+            "model": "gpt-5.4-mini",
+            "reasoning_effort": "low",
+            "max_output_chars": 1200,
+            "enabled": True,
+        },
+    )
+
+    assert response.status_code == 201
+    created = response.json()["subagent"]
+    assert created["id"] == "fact_checker"
+    assert created["label"] == "Fact Checker"
+    assert (tmp_path / "home" / "agents" / "fact_checker.md").exists()
+
+    subagents = client.get("/api/subagents").json()["subagents"]
+    assert any(subagent["id"] == "fact_checker" for subagent in subagents)
+
+
+def test_create_subagent_rejects_duplicate_id(tmp_path) -> None:
+    client = TestClient(create_app(data_dir=tmp_path / "data", harnessdiff_home=tmp_path / "home"))
+    payload = {
+        "id": "researcher",
+        "label": "Researcher",
+        "instructions": "Duplicate.",
+    }
+
+    response = client.post("/api/subagents", json=payload)
+
+    assert response.status_code == 400
+    assert "already exists" in response.json()["detail"]

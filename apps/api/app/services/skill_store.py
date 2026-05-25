@@ -9,7 +9,13 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from app.core.settings import settings
-from app.models.skill import SkillImportFile, SkillSummary
+from app.models.skill import SkillImportFile, SubagentCreateRequest, SubagentSummary, SkillSummary
+from app.services.subagent_definitions import (
+    DEFAULT_SUBAGENTS,
+    SubagentDefinition,
+    definition_to_markdown,
+    load_subagent_definitions,
+)
 
 
 DEFAULT_MEMORY_TEXT = """# HarnessDiff Memory
@@ -24,6 +30,10 @@ class SkillImportError(ValueError):
     pass
 
 
+class SubagentDefinitionError(ValueError):
+    pass
+
+
 @dataclass(frozen=True)
 class SkillStore:
     home_dir: Path = settings.harnessdiff_home
@@ -32,12 +42,18 @@ class SkillStore:
     def skills_dir(self) -> Path:
         return self.home_dir / "skills"
 
+    @property
+    def agents_dir(self) -> Path:
+        return self.home_dir / "agents"
+
     def ensure_dirs(self) -> Path:
         self.skills_dir.mkdir(parents=True, exist_ok=True)
+        self.agents_dir.mkdir(parents=True, exist_ok=True)
         for name in ("CLAUDE.md", "AGENTS.md", "agents.md"):
             path = self.home_dir / name
             if not path.exists():
                 path.write_text(DEFAULT_MEMORY_TEXT, encoding="utf-8", newline="\n")
+        self._ensure_default_subagents()
         return self.home_dir
 
     def list_skills(self) -> list[SkillSummary]:
@@ -69,6 +85,48 @@ class SkillStore:
             description = f": {skill.description}" if skill.description else ""
             lines.append(f"- {skill.name}{description}")
         return "\n".join(lines)
+
+    def agents_context(self) -> str:
+        self.ensure_dirs()
+        agents_md = self.home_dir / "AGENTS.md"
+        if not agents_md.exists():
+            return ""
+        text = agents_md.read_text(encoding="utf-8").strip()
+        if not text:
+            return ""
+        return "HarnessDiff AGENTS.md instructions:\n" + text
+
+    def subagent_definitions(self) -> tuple[SubagentDefinition, ...]:
+        self.ensure_dirs()
+        definitions = load_subagent_definitions(self.agents_dir)
+        return definitions or DEFAULT_SUBAGENTS
+
+    def list_subagents(self) -> list[SubagentSummary]:
+        self.ensure_dirs()
+        definitions_by_id = {definition.id: definition for definition in self.subagent_definitions()}
+        summaries = []
+        for subagent_id, definition in sorted(definitions_by_id.items()):
+            path = self._subagent_path(subagent_id, must_exist=False)
+            summaries.append(_summary_from_subagent_definition(definition, path))
+        return summaries
+
+    def create_subagent(self, payload: SubagentCreateRequest) -> SubagentSummary:
+        self.ensure_dirs()
+        path = self._subagent_path(payload.id, must_exist=False)
+        if path.exists():
+            raise SubagentDefinitionError(f"Subagent already exists: {payload.id}")
+        definition = SubagentDefinition(
+            id=payload.id,
+            label=payload.label,
+            description=payload.description,
+            instructions=payload.instructions,
+            model=payload.model,
+            reasoning_effort=payload.reasoning_effort,
+            max_output_chars=payload.max_output_chars,
+            enabled=payload.enabled,
+        )
+        path.write_text(definition_to_markdown(definition), encoding="utf-8", newline="\n")
+        return _summary_from_subagent_definition(definition, path)
 
     def import_skill_file(self, filename: str, data_base64: str) -> SkillSummary:
         self.ensure_dirs()
@@ -156,6 +214,26 @@ class SkillStore:
             raise FileNotFoundError(skill_id)
         return path
 
+    def _ensure_default_subagents(self) -> None:
+        for definition in DEFAULT_SUBAGENTS:
+            path = self.agents_dir / f"{definition.id}.md"
+            if not path.exists():
+                path.write_text(
+                    definition_to_markdown(definition),
+                    encoding="utf-8",
+                    newline="\n",
+                )
+
+    def _subagent_path(self, subagent_id: str, *, must_exist: bool = True) -> Path:
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", subagent_id):
+            raise SubagentDefinitionError(f"Invalid subagent id: {subagent_id}")
+        path = (self.agents_dir / f"{subagent_id}.md").resolve()
+        if not path.is_relative_to(self.agents_dir.resolve()):
+            raise SubagentDefinitionError(f"Invalid subagent id: {subagent_id}")
+        if must_exist and not path.exists():
+            raise SubagentDefinitionError(f"Subagent not found: {subagent_id}")
+        return path
+
 
 @dataclass(frozen=True)
 class ParsedSkill:
@@ -212,3 +290,17 @@ def _slugify(value: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip().lower()).strip("-._")
     return slug[:80]
 
+
+def _summary_from_subagent_definition(
+    definition: SubagentDefinition, path: Path
+) -> SubagentSummary:
+    return SubagentSummary(
+        id=definition.id,
+        label=definition.label,
+        description=definition.description,
+        model=definition.model,
+        reasoning_effort=definition.reasoning_effort,
+        max_output_chars=definition.max_output_chars,
+        enabled=definition.enabled,
+        path=str(path),
+    )
