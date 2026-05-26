@@ -7,6 +7,7 @@ import zipfile
 from fastapi.testclient import TestClient
 
 from app.main import create_app
+from app.services.skill_store import SkillStore
 
 
 def _b64(data: bytes) -> str:
@@ -96,6 +97,53 @@ def test_import_folder_requires_skill_md_and_lists_summary(tmp_path) -> None:
             "path": str((tmp_path / "home" / "skills" / "folder-skill").resolve()),
         }
     ]
+
+
+def test_codex_style_skill_discovery_scans_project_and_user_scopes(tmp_path) -> None:
+    repo_root = tmp_path / "repo"
+    home = tmp_path / "home" / ".harnessdiff"
+    project_skill = repo_root / ".codex" / "skills" / "project-skill"
+    project_skill.mkdir(parents=True)
+    (project_skill / "SKILL.md").write_text(
+        "---\nname: shared-skill\ndescription: Project description\n---\n# Project\n",
+        encoding="utf-8",
+    )
+    project_agents_skill = repo_root / ".agents" / "skills" / "agent-skill"
+    project_agents_skill.mkdir(parents=True)
+    (project_agents_skill / "SKILL.md").write_text(
+        "---\nname: agent-skill\ndescription: Agent root description\n---\n# Agent\n",
+        encoding="utf-8",
+    )
+    user_skill = tmp_path / "home" / ".agents" / "skills" / "user-skill"
+    user_skill.mkdir(parents=True)
+    (user_skill / "SKILL.md").write_text(
+        "---\nname: shared-skill\ndescription: User description\n---\n# User\n",
+        encoding="utf-8",
+    )
+    disabled_skill = repo_root / ".codex" / "skills" / "disabled-skill"
+    disabled_skill.mkdir(parents=True)
+    (disabled_skill / "SKILL.md").write_text(
+        "---\nname: disabled-skill\ndescription: Hidden\nenabled: false\n---\n# Disabled\n",
+        encoding="utf-8",
+    )
+
+    store = SkillStore(home_dir=home, repo_root=repo_root)
+    skills = store.list_skills()
+
+    assert [skill.name for skill in skills] == ["agent-skill", "shared-skill", "shared-skill"]
+    assert skills[1].id == "shared-skill"
+    assert skills[2].id.startswith("shared-skill--")
+    assert all(skill.name != "disabled-skill" for skill in skills)
+
+    manifest = store.context_manifest()
+    assert "Skill roots:" in manifest
+    assert "r0 (project)" in manifest
+    assert "$shared-skill" in manifest
+    assert "progressive disclosure" in manifest
+
+    detail = store.read_skill("shared-skill")
+    assert "# Project" in detail["content"]
+    assert detail["scope"] == "project"
 
 
 def test_create_subagent_definition_and_list_it(tmp_path) -> None:

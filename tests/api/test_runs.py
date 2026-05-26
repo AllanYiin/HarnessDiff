@@ -6,7 +6,13 @@ from collections.abc import AsyncIterator
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from app.providers.base import LLMProvider, LLMRequest, ProviderEvent
+from app.providers.base import (
+    LLMProvider,
+    LLMRequest,
+    ProviderEvent,
+    SkillSelectionRequest,
+    SkillSelectionResult,
+)
 from app.providers.openai_responses import OpenAIResponsesProvider
 
 
@@ -52,6 +58,17 @@ class FakeProvider(LLMProvider):
                 "provider_raw_usage": {"input_tokens": 3},
             },
         )
+
+
+class SkillSelectingProvider(FakeProvider):
+    def __init__(self, selected_skill_ids: tuple[str, ...]) -> None:
+        super().__init__()
+        self.selected_skill_ids = selected_skill_ids
+        self.skill_selection_requests: list[SkillSelectionRequest] = []
+
+    async def select_skills(self, request: SkillSelectionRequest) -> SkillSelectionResult:
+        self.skill_selection_requests.append(request)
+        return SkillSelectionResult(selected_skill_ids=self.selected_skill_ids, source="llm")
 
 
 class FailingHarnessProvider(FakeProvider):
@@ -126,6 +143,18 @@ def test_run_stream_writes_profile_outputs_usage_and_harnessable_trace(tmp_path)
     assert json.loads((run_dir / "run.json").read_text(encoding="utf-8"))["status"] == "completed"
     assert {request.profile_id for request in provider.requests} == {"baseline", "harness"}
     requests_by_profile = {request.profile_id: request for request in provider.requests}
+    assert (
+        requests_by_profile["baseline"].prompt_cache_key
+        == f"harnessdiff:project:{project_id}:profile:baseline"
+    )
+    assert (
+        requests_by_profile["harness"].prompt_cache_key
+        == f"harnessdiff:project:{project_id}:profile:harness"
+    )
+    assert (
+        requests_by_profile["baseline"].prompt_cache_key
+        != requests_by_profile["harness"].prompt_cache_key
+    )
     assert requests_by_profile["baseline"].tools_enabled is True
     assert requests_by_profile["harness"].tools_enabled is True
     baseline_openai_tool_names = [
@@ -139,10 +168,13 @@ def test_run_stream_writes_profile_outputs_usage_and_harnessable_trace(tmp_path)
     assert "standard_fs_read" in baseline_openai_tools
     assert "standard_web_search" in baseline_openai_tools
     assert "standard_shell_bash" not in baseline_openai_tools
+    assert "standard_code_container_exec" not in baseline_openai_tools
     assert "harness_subagent_run" not in baseline_openai_tools
     assert "multi_tool_use_parallel" not in baseline_openai_tools
     assert harness_openai_tool_names[0] == "standard_shell_bash"
+    assert harness_openai_tool_names[1] == "standard_code_container_exec"
     assert "standard_shell_bash" in harness_openai_tools
+    assert "standard_code_container_exec" in harness_openai_tools
     assert "harness_subagent_run" in harness_openai_tools
     assert "multi_tool_use_parallel" in harness_openai_tools
     assert "Sources" not in requests_by_profile["baseline"].instructions
@@ -154,14 +186,22 @@ def test_run_stream_writes_profile_outputs_usage_and_harnessable_trace(tmp_path)
     assert any(event.get("harness_decision", {}).get("effect") == "ALLOW" for event in harness_events)
     baseline_input = json.loads((run_dir / "baseline" / "input.json").read_text(encoding="utf-8"))
     harness_input = json.loads((run_dir / "harness" / "input.json").read_text(encoding="utf-8"))
+    assert (
+        baseline_input["prompt_cache_key"]
+        == f"harnessdiff:project:{project_id}:profile:baseline"
+    )
+    assert harness_input["prompt_cache_key"] == f"harnessdiff:project:{project_id}:profile:harness"
     assert "standard.fs.read" in baseline_input["tool_names"]
     assert "standard.web.search" in baseline_input["tool_names"]
     assert "standard.shell.bash" not in baseline_input["tool_names"]
+    assert "standard.code.container_exec" not in baseline_input["tool_names"]
     assert "harness.subagent.run" not in baseline_input["tool_names"]
     assert "multi_tool_use.parallel" not in baseline_input["tool_names"]
     assert "standard.fs.read" in harness_input["tool_names"]
     assert harness_input["tool_names"][0] == "standard.shell.bash"
+    assert harness_input["tool_names"][1] == "standard.code.container_exec"
     assert "standard.shell.bash" in harness_input["tool_names"]
+    assert "standard.code.container_exec" in harness_input["tool_names"]
     assert "harness.subagent.run" in harness_input["tool_names"]
     assert "multi_tool_use.parallel" in harness_input["tool_names"]
 
@@ -231,7 +271,7 @@ def test_run_applies_profile_level_harness_modules_to_instructions(tmp_path) -> 
     assert input_doc["harness_modules"]["output_contract"] is False
 
 
-def test_first_turn_includes_available_skill_first_layer_context(tmp_path) -> None:
+def test_every_turn_includes_available_skill_first_layer_context(tmp_path) -> None:
     home = tmp_path / "home"
     skill_dir = home / "skills" / "demo-skill"
     skill_dir.mkdir(parents=True)
@@ -260,7 +300,344 @@ def test_first_turn_includes_available_skill_first_layer_context(tmp_path) -> No
         _ = "".join(response.iter_text())
 
     assert "Available HarnessDiff skills" in provider.requests[0].instructions
+    assert "metadata layer only" in provider.requests[0].instructions
+    assert "$skill-id" in provider.requests[0].instructions
+    assert "progressive disclosure" in provider.requests[0].instructions
     assert "demo-skill: Demo skill description" in provider.requests[0].instructions
+
+    run = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "second turn",
+            "input_mode": "independent",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+            "profiles": [{"id": "controlled", "label": "Controlled", "harness_modules": {}}],
+        },
+    ).json()
+    with client.stream("GET", f"/api/runs/{run['id']}/stream") as response:
+        assert response.status_code == 200
+        _ = "".join(response.iter_text())
+
+    assert "Available HarnessDiff skills" in provider.requests[-1].instructions
+    assert "demo-skill: Demo skill description" in provider.requests[-1].instructions
+    assert provider.requests[0].prompt_cache_key == provider.requests[-1].prompt_cache_key
+    assert (
+        provider.requests[-1].prompt_cache_key
+        == f"harnessdiff:project:{project_id}:profile:controlled"
+    )
+
+
+def test_matching_skill_description_auto_loads_full_skill_context(tmp_path) -> None:
+    home = tmp_path / "home"
+    invoice_skill_dir = home / "skills" / "invoice-helper"
+    invoice_skill_dir.mkdir(parents=True)
+    (invoice_skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: invoice-helper\n"
+        "description: Use when the user asks to summarize invoices or extract invoice totals.\n"
+        "---\n"
+        "# Invoice workflow\n"
+        "Always use the invoice workflow.\n",
+        encoding="utf-8",
+    )
+    poetry_skill_dir = home / "skills" / "poetry-helper"
+    poetry_skill_dir.mkdir(parents=True)
+    (poetry_skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: poetry-helper\n"
+        "description: Use when the user asks to translate poetry.\n"
+        "---\n"
+        "# Poetry workflow\n",
+        encoding="utf-8",
+    )
+    provider = FakeProvider()
+    client = TestClient(
+        create_app(data_dir=tmp_path / "data", harnessdiff_home=home, llm_provider=provider)
+    )
+    project_id = client.post("/api/projects", json={"name": "Auto skill context"}).json()["id"]
+
+    warmup = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "hello",
+            "input_mode": "integrated",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+            "profiles": [{"id": "controlled", "label": "Controlled", "harness_modules": {}}],
+        },
+    ).json()
+    with client.stream("GET", f"/api/runs/{warmup['id']}/stream") as response:
+        assert response.status_code == 200
+        _ = "".join(response.iter_text())
+
+    assert "Auto-activated HarnessDiff skill details" not in provider.requests[0].instructions
+
+    run = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "Please summarize invoice totals.",
+            "input_mode": "independent",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+            "profiles": [{"id": "controlled", "label": "Controlled", "harness_modules": {}}],
+        },
+    ).json()
+    with client.stream("GET", f"/api/runs/{run['id']}/stream") as response:
+        assert response.status_code == 200
+        _ = "".join(response.iter_text())
+
+    instructions = provider.requests[-1].instructions
+    assert "Available HarnessDiff skills" in instructions
+    assert "Auto-activated HarnessDiff skill details" in instructions
+    assert "Activated skill 1: invoice-helper" in instructions
+    assert "# Invoice workflow" in instructions
+    assert "# Poetry workflow" not in instructions
+
+
+def test_llm_skill_selector_is_used_before_deterministic_fallback(tmp_path) -> None:
+    home = tmp_path / "home"
+    skill_dir = home / "skills" / "humanize-text"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: humanize-text\n"
+        "description: Rewrite user-provided copy into a natural human voice.\n"
+        "---\n"
+        "# Humanize workflow\n",
+        encoding="utf-8",
+    )
+    provider = SkillSelectingProvider(("humanize-text",))
+    client = TestClient(
+        create_app(data_dir=tmp_path / "data", harnessdiff_home=home, llm_provider=provider)
+    )
+    project_id = client.post("/api/projects", json={"name": "LLM skill selector"}).json()["id"]
+
+    run = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "這段話 AI 味太重，幫我改自然一點。",
+            "input_mode": "integrated",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+            "profiles": [
+                {"id": "baseline", "label": "NoHarness", "harness_modules": {}},
+                {"id": "harness", "label": "Harness", "harness_modules": {"tool_policy": True}},
+            ],
+        },
+    ).json()
+    with client.stream("GET", f"/api/runs/{run['id']}/stream") as response:
+        assert response.status_code == 200
+        _ = "".join(response.iter_text())
+
+    assert len(provider.skill_selection_requests) == 1
+    selection_request = provider.skill_selection_requests[0]
+    assert selection_request.prompt == "這段話 AI 味太重，幫我改自然一點。"
+    assert selection_request.skills == (
+        {
+            "id": "humanize-text",
+            "name": "humanize-text",
+            "description": "Rewrite user-provided copy into a natural human voice.",
+        },
+    )
+    assert all("# Humanize workflow" in request.instructions for request in provider.requests)
+
+
+def test_explicit_dollar_skill_invocation_takes_priority_over_llm_selection(tmp_path) -> None:
+    home = tmp_path / "home"
+    earnings_skill_dir = home / "skills" / "earnings-call-interpretation"
+    earnings_skill_dir.mkdir(parents=True)
+    (earnings_skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: earnings-call-interpretation\n"
+        "description: 在使用者要解讀法說會、earnings call、逐字稿或 guidance / Q&A 時使用。\n"
+        "---\n"
+        "# Earnings workflow\n",
+        encoding="utf-8",
+    )
+    web_skill_dir = home / "skills" / "web-access-advanced"
+    web_skill_dir.mkdir(parents=True)
+    (web_skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: web-access-advanced\n"
+        "description: 在使用者要搜尋最新資訊、讀取網頁或處理動態站點時使用。\n"
+        "---\n"
+        "# Web workflow\n",
+        encoding="utf-8",
+    )
+    provider = SkillSelectingProvider(("web-access-advanced",))
+    client = TestClient(
+        create_app(data_dir=tmp_path / "data", harnessdiff_home=home, llm_provider=provider)
+    )
+    project_id = client.post("/api/projects", json={"name": "Explicit skill selector"}).json()["id"]
+
+    run = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "$earnings-call-interpretation 請上網搜索NVIDIA最新一季法說會逐字稿，並解讀他",
+            "input_mode": "integrated",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+            "profiles": [{"id": "controlled", "label": "Controlled", "harness_modules": {}}],
+        },
+    ).json()
+    with client.stream("GET", f"/api/runs/{run['id']}/stream") as response:
+        assert response.status_code == 200
+        _ = "".join(response.iter_text())
+
+    instructions = provider.requests[-1].instructions
+    assert "Activated skill 1: earnings-call-interpretation" in instructions
+    assert "Activated skill 2: web-access-advanced" in instructions
+    assert "# Earnings workflow" in instructions
+    assert "# Web workflow" in instructions
+
+
+def test_deterministic_skill_match_is_used_when_llm_selector_returns_empty(tmp_path) -> None:
+    home = tmp_path / "home"
+    skill_dir = home / "skills" / "earnings-call-interpretation"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: earnings-call-interpretation\n"
+        "description: 在使用者要解讀法說會、earnings call、逐字稿或 guidance / Q&A 時使用。\n"
+        "---\n"
+        "# Earnings workflow\n",
+        encoding="utf-8",
+    )
+    provider = SkillSelectingProvider(())
+    client = TestClient(
+        create_app(data_dir=tmp_path / "data", harnessdiff_home=home, llm_provider=provider)
+    )
+    project_id = client.post("/api/projects", json={"name": "Fallback skill selector"}).json()["id"]
+
+    run = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "請上網搜索NVIDIA最新一季法說會逐字稿，並解讀他",
+            "input_mode": "integrated",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+            "profiles": [
+                {"id": "baseline", "label": "NoHarness", "harness_modules": {}},
+                {"id": "harness", "label": "Harness", "harness_modules": {"tool_policy": True}},
+            ],
+        },
+    ).json()
+    with client.stream("GET", f"/api/runs/{run['id']}/stream") as response:
+        assert response.status_code == 200
+        _ = "".join(response.iter_text())
+
+    assert len(provider.skill_selection_requests) == 1
+    assert all("# Earnings workflow" in request.instructions for request in provider.requests)
+    run_dir = tmp_path / "data" / "projects" / project_id / "runs" / run["id"]
+    baseline_events = [
+        json.loads(line)
+        for line in (run_dir / "baseline" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(
+        event["type"] == "skill_invocation"
+        and event["skill_id"] == "earnings-call-interpretation"
+        for event in baseline_events
+    )
+
+
+def test_deterministic_skill_match_is_merged_with_adjacent_llm_selection(tmp_path) -> None:
+    home = tmp_path / "home"
+    earnings_skill_dir = home / "skills" / "earnings-call-interpretation"
+    earnings_skill_dir.mkdir(parents=True)
+    (earnings_skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: earnings-call-interpretation\n"
+        "description: 在使用者要解讀法說會、earnings call、逐字稿或 guidance / Q&A 時使用。\n"
+        "---\n"
+        "# Earnings workflow\n",
+        encoding="utf-8",
+    )
+    web_skill_dir = home / "skills" / "web-access-advanced"
+    web_skill_dir.mkdir(parents=True)
+    (web_skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: web-access-advanced\n"
+        "description: 在使用者要搜尋最新資訊、讀取網頁或處理動態站點時使用。\n"
+        "---\n"
+        "# Web workflow\n",
+        encoding="utf-8",
+    )
+    provider = SkillSelectingProvider(("web-access-advanced",))
+    client = TestClient(
+        create_app(data_dir=tmp_path / "data", harnessdiff_home=home, llm_provider=provider)
+    )
+    project_id = client.post("/api/projects", json={"name": "Merged skill selector"}).json()["id"]
+
+    run = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "請上網搜索NVIDIA最新一季法說會逐字稿，並解讀他",
+            "input_mode": "integrated",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+            "profiles": [{"id": "controlled", "label": "Controlled", "harness_modules": {}}],
+        },
+    ).json()
+    with client.stream("GET", f"/api/runs/{run['id']}/stream") as response:
+        assert response.status_code == 200
+        _ = "".join(response.iter_text())
+
+    instructions = provider.requests[-1].instructions
+    assert "Activated skill 1: web-access-advanced" in instructions
+    assert "Activated skill 2: earnings-call-interpretation" in instructions
+    assert "# Web workflow" in instructions
+    assert "# Earnings workflow" in instructions
+
+
+def test_chinese_skill_description_auto_loads_full_skill_context(tmp_path) -> None:
+    home = tmp_path / "home"
+    financial_skill_dir = home / "skills" / "financial-checkup"
+    financial_skill_dir.mkdir(parents=True)
+    (financial_skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: financial-checkup\n"
+        "description: 當使用者要做台灣脈絡的財務健檢、保單健檢、家庭現金流盤點、退休缺口分析時使用。\n"
+        "---\n"
+        "# Financial workflow\n"
+        "Always use the financial workflow.\n",
+        encoding="utf-8",
+    )
+    writing_skill_dir = home / "skills" / "humanize-text"
+    writing_skill_dir.mkdir(parents=True)
+    (writing_skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: humanize-text\n"
+        "description: 在使用者要潤稿貼文、重寫 Email 或把講稿寫自然一點時使用。\n"
+        "---\n"
+        "# Writing workflow\n",
+        encoding="utf-8",
+    )
+    provider = FakeProvider()
+    client = TestClient(
+        create_app(data_dir=tmp_path / "data", harnessdiff_home=home, llm_provider=provider)
+    )
+    project_id = client.post("/api/projects", json={"name": "Chinese auto skill"}).json()["id"]
+
+    run = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "請幫我做保單健檢，也看一下家庭現金流和退休缺口。",
+            "input_mode": "integrated",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+            "profiles": [{"id": "controlled", "label": "Controlled", "harness_modules": {}}],
+        },
+    ).json()
+    with client.stream("GET", f"/api/runs/{run['id']}/stream") as response:
+        assert response.status_code == 200
+        _ = "".join(response.iter_text())
+
+    instructions = provider.requests[-1].instructions
+    assert "Auto-activated HarnessDiff skill details" in instructions
+    assert "Activated skill 1: financial-checkup" in instructions
+    assert "# Financial workflow" in instructions
+    assert "# Writing workflow" not in instructions
 
 
 def test_every_turn_includes_harnessdiff_agents_md_context(tmp_path) -> None:
@@ -476,6 +853,61 @@ def test_provider_error_event_message_is_streamed_and_persisted(tmp_path) -> Non
         event["type"] == "error" and event["message"] == "tool round limit exceeded"
         for event in persisted
     )
+
+
+def test_run_stream_passes_image_attachments_to_provider(tmp_path) -> None:
+    provider = FakeProvider()
+    client = TestClient(
+        create_app(data_dir=tmp_path, harnessdiff_home=tmp_path / ".harnessdiff", llm_provider=provider)
+    )
+    project_id = client.post("/api/projects", json={"name": "Vision"}).json()["id"]
+
+    create_response = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "describe the image",
+            "input_mode": "integrated",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+            "profiles": [{"id": "baseline", "label": "NoHarness", "harness_modules": {}}],
+            "attachments": [
+                {
+                    "kind": "image",
+                    "name": "screen.png",
+                    "mime_type": "image/png",
+                    "size_bytes": 12,
+                    "image_url": "data:image/png;base64,abc",
+                    "detail": "auto",
+                }
+            ],
+        },
+    )
+    assert create_response.status_code == 201
+    run = create_response.json()
+
+    with client.stream("GET", f"/api/runs/{run['id']}/stream") as response:
+        assert response.status_code == 200
+        _sse_events("".join(response.iter_text()))
+
+    assert provider.requests[0].image_attachments[0].image_url == "data:image/png;base64,abc"
+    run_dir = tmp_path / "projects" / project_id / "runs" / run["id"]
+    baseline_input = json.loads((run_dir / "baseline" / "input.json").read_text(encoding="utf-8"))
+    assert baseline_input["attachments"] == [
+        {
+            "kind": "image",
+            "name": "screen.png",
+            "mime_type": "image/png",
+            "size_bytes": 12,
+            "detail": "auto",
+        }
+    ]
+    analysis = client.get(f"/api/runs/{run['id']}/analysis").json()
+    assert analysis["profiles"]["baseline"]["provider_context_keys"] == [
+        "instructions",
+        "prompt",
+        "attachments",
+        "tools",
+    ]
 
 
 def test_harness_subagent_tool_call_writes_artifacts_and_usage_rollup(tmp_path) -> None:

@@ -9,12 +9,19 @@ from typing import Any
 
 from app.models.project import utc_now_iso
 from app.models.run import RunDocument, RunStatus
-from app.providers.base import LLMProvider, LLMRequest, ProviderEvent
+from app.providers.base import (
+    LLMImageAttachment,
+    LLMProvider,
+    LLMRequest,
+    ProviderEvent,
+    SkillSelectionRequest,
+)
 from app.services.analysis_builder import build_run_analysis
 from app.services.chat_tool_runtime import ChatToolRuntime
+from app.services.container_code_runtime import CONTAINER_CODE_TOOL_NAME
 from app.services.context_builder import build_instructions
 from app.services.harnessable_control import HarnessableControlPlane
-from app.services.skill_store import SkillStore
+from app.services.skill_store import REQUESTED_SKILL_DETAILS_MARKER, SkillStore
 from app.services.subagent_definitions import DEFAULT_SUBAGENTS
 from app.services.subagent_runtime import SubagentToolRuntime
 from app.services.tool_runtime import ToolAnythingRuntime
@@ -24,7 +31,10 @@ from app.storage.project_store import ProjectStore
 
 logger = logging.getLogger(__name__)
 
-NO_HARNESS_EXCLUDED_TOOL_NAMES: tuple[str, ...] = ("standard.shell.bash",)
+NO_HARNESS_EXCLUDED_TOOL_NAMES: tuple[str, ...] = (
+    "standard.shell.bash",
+    CONTAINER_CODE_TOOL_NAME,
+)
 
 
 class RunOrchestrator:
@@ -46,6 +56,7 @@ class RunOrchestrator:
         self.store.update_run_status(run.project_id, run.id, RunStatus.running)
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         profile_errors: list[dict[str, Any]] = []
+        selected_skill_ids = await self._select_skill_ids_for_run(run)
 
         async def run_profile(profile) -> None:
             try:
@@ -58,10 +69,15 @@ class RunOrchestrator:
                         agents_context = self.skill_store.agents_context()
                         if agents_context:
                             instructions = f"{instructions}\n\n{agents_context}"
-                    if run.turn_index == 0:
-                        skill_context = self.skill_store.context_manifest()
-                        if skill_context:
-                            instructions = f"{instructions}\n\n{skill_context}"
+                    skill_context = self.skill_store.context_manifest()
+                    if skill_context:
+                        instructions = f"{instructions}\n\n{skill_context}"
+                    auto_skill_context = self.skill_store.auto_skill_context(
+                        run.prompt,
+                        skill_ids=selected_skill_ids,
+                    )
+                    if auto_skill_context:
+                        instructions = f"{instructions}\n\n{auto_skill_context}"
                 conversation_messages = self.store.read_profile_conversation_messages(
                     run.project_id, profile.id, run.turn_index
                 )
@@ -95,6 +111,18 @@ class RunOrchestrator:
                     if active_tool_runtime is not None
                     else ()
                 )
+                prompt_cache_key = _prompt_cache_key(run.project_id, profile.id)
+                image_attachments = tuple(
+                    LLMImageAttachment(
+                        name=attachment.name,
+                        mime_type=attachment.mime_type,
+                        size_bytes=attachment.size_bytes,
+                        image_url=attachment.image_url,
+                        detail=attachment.detail,
+                    )
+                    for attachment in run.attachments
+                    if attachment.kind == "image"
+                )
                 self.store.prepare_profile_run(
                     run.project_id,
                     run.id,
@@ -105,7 +133,13 @@ class RunOrchestrator:
                     profile.harness_modules,
                     conversation_messages,
                     tool_names,
+                    image_attachments,
+                    prompt_cache_key,
                 )
+                for sequence, skill_id in enumerate(selected_skill_ids):
+                    self.store.append_skill_invocation_event(
+                        run.project_id, run.id, profile.id, sequence, skill_id
+                    )
                 gate = self.control_plane.evaluate_before_provider(run, profile, instructions)
                 for sequence, decision in enumerate(gate.decisions):
                     self.store.append_harness_decision_event(
@@ -133,7 +167,9 @@ class RunOrchestrator:
                     reasoning_effort=run.reasoning_effort,
                     instructions=instructions,
                     prompt=run.prompt,
+                    image_attachments=image_attachments,
                     conversation_messages=conversation_messages,
+                    prompt_cache_key=prompt_cache_key,
                     tools_enabled=active_tool_runtime is not None,
                     tool_context=active_tool_runtime,
                 )
@@ -212,6 +248,36 @@ class RunOrchestrator:
             self.store.update_run_status(run.project_id, run.id, RunStatus.cancelled)
             raise
 
+    async def _select_skill_ids_for_run(self, run: RunDocument) -> tuple[str, ...]:
+        if self.skill_store is None:
+            return ()
+        if REQUESTED_SKILL_DETAILS_MARKER in run.prompt:
+            return ()
+        candidates = self.skill_store.skill_selection_candidates()
+        if not candidates:
+            return ()
+        explicit_ids = self.skill_store.explicit_skill_ids_for_prompt(run.prompt)
+        fallback_ids = tuple(
+            activation.id
+            for activation in self.skill_store.select_skills_for_prompt(run.prompt)
+        )
+        selection = await self.provider.select_skills(
+            SkillSelectionRequest(
+                model=run.model,
+                prompt=run.prompt,
+                skills=candidates,
+                max_selected=3,
+            )
+        )
+        if selection.source == "llm":
+            return _merge_selected_skill_ids(
+                explicit_ids,
+                selection.selected_skill_ids,
+                fallback_ids,
+                max_selected=3,
+            )
+        return _merge_selected_skill_ids(explicit_ids, fallback_ids, max_selected=3)
+
 
 def sse_encode(payload: dict[str, Any]) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -235,3 +301,22 @@ def _event_to_payload(run_id: str, event: ProviderEvent) -> dict[str, Any]:
     if event.type == "tool_call":
         payload["tool_call"] = event.raw
     return payload
+
+
+def _prompt_cache_key(project_id: str, profile_id: str) -> str:
+    return f"harnessdiff:project:{project_id}:profile:{profile_id}"
+
+
+def _merge_selected_skill_ids(
+    *skill_id_groups: tuple[str, ...],
+    max_selected: int,
+) -> tuple[str, ...]:
+    selected: list[str] = []
+    for skill_ids in skill_id_groups:
+        for skill_id in skill_ids:
+            if skill_id in selected:
+                continue
+            selected.append(skill_id)
+            if len(selected) >= max_selected:
+                return tuple(selected)
+    return tuple(selected)

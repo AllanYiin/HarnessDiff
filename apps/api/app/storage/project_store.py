@@ -13,6 +13,7 @@ from app.core.settings import settings
 from app.models.harness_modules import normalize_harness_modules
 from app.models.project import ProjectCreate, ProjectDocument, ProjectUpdate, utc_now_iso
 from app.models.run import ProfileConfig, RunCreate, RunDocument, RunStatus, new_run_document
+from app.providers.base import LLMImageAttachment
 from app.providers.base import ProviderEvent
 from app.storage.errors import InvalidProjectIdError, ProjectNotFoundError, StorageCorruptionError
 from app.storage.json_io import read_json, write_json_atomic
@@ -190,6 +191,8 @@ class ProjectStore:
         harness_modules: dict[str, bool],
         conversation_messages: tuple[dict[str, str], ...] = (),
         tool_names: tuple[str, ...] = (),
+        image_attachments: tuple[LLMImageAttachment, ...] = (),
+        prompt_cache_key: str = "",
     ) -> None:
         profile_dir = self._run_dir(project_id, run_id) / profile_id
         profile_dir.mkdir(parents=True, exist_ok=True)
@@ -203,7 +206,18 @@ class ProjectStore:
                 "instructions": instructions,
                 "harness_modules": harness_modules,
                 "conversation_messages": list(conversation_messages),
+                "prompt_cache_key": prompt_cache_key,
                 "tool_names": list(tool_names),
+                "attachments": [
+                    {
+                        "kind": "image",
+                        "name": attachment.name,
+                        "mime_type": attachment.mime_type,
+                        "size_bytes": attachment.size_bytes,
+                        "detail": attachment.detail,
+                    }
+                    for attachment in image_attachments
+                ],
                 "created_at": utc_now_iso(),
             },
         )
@@ -254,6 +268,21 @@ class ProjectStore:
                 "profile_id": profile_id,
                 "sequence": sequence,
                 "harness_decision": decision,
+                "created_at": utc_now_iso(),
+            },
+        )
+
+    def append_skill_invocation_event(
+        self, project_id: str, run_id: str, profile_id: str, sequence: int, skill_id: str
+    ) -> None:
+        self._append_jsonl(
+            self._run_dir(project_id, run_id) / profile_id / "events.jsonl",
+            {
+                "schema_version": settings.schema_version,
+                "type": "skill_invocation",
+                "profile_id": profile_id,
+                "sequence": sequence,
+                "skill_id": skill_id,
                 "created_at": utc_now_iso(),
             },
         )
