@@ -165,7 +165,8 @@ def test_run_stream_writes_profile_outputs_usage_and_harnessable_trace(tmp_path)
     ]
     baseline_openai_tools = set(baseline_openai_tool_names)
     harness_openai_tools = set(harness_openai_tool_names)
-    assert "standard_fs_read" in baseline_openai_tools
+    assert "standard_fs_read" not in baseline_openai_tools
+    assert "standard_fs_grep" in baseline_openai_tools
     assert "standard_web_search" in baseline_openai_tools
     assert "standard_shell_bash" not in baseline_openai_tools
     assert "standard_code_container_exec" not in baseline_openai_tools
@@ -191,13 +192,15 @@ def test_run_stream_writes_profile_outputs_usage_and_harnessable_trace(tmp_path)
         == f"harnessdiff:project:{project_id}:profile:baseline"
     )
     assert harness_input["prompt_cache_key"] == f"harnessdiff:project:{project_id}:profile:harness"
-    assert "standard.fs.read" in baseline_input["tool_names"]
+    assert "standard.fs.read" not in baseline_input["tool_names"]
+    assert "standard.fs.grep" in baseline_input["tool_names"]
     assert "standard.web.search" in baseline_input["tool_names"]
     assert "standard.shell.bash" not in baseline_input["tool_names"]
     assert "standard.code.container_exec" not in baseline_input["tool_names"]
     assert "harness.subagent.run" not in baseline_input["tool_names"]
     assert "multi_tool_use.parallel" not in baseline_input["tool_names"]
-    assert "standard.fs.read" in harness_input["tool_names"]
+    assert "standard.fs.read" not in harness_input["tool_names"]
+    assert "standard.fs.grep" in harness_input["tool_names"]
     assert harness_input["tool_names"][0] == "standard.shell.bash"
     assert harness_input["tool_names"][1] == "standard.code.container_exec"
     assert "standard.shell.bash" in harness_input["tool_names"]

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import re
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,7 +19,7 @@ ALLOWED_TOOL_NAMES: tuple[str, ...] = (
     "standard.fs.list",
     "standard.fs.stat",
     "standard.fs.search",
-    "standard.fs.read",
+    "standard.fs.grep",
     "standard.data.json_parse",
     "standard.data.json_validate",
     "standard.data.csv_inspect",
@@ -77,6 +79,78 @@ class ToolAnythingRuntime:
                 roots={"workspace": self.root},
                 include_write_tools=False,
             ),
+        )
+        self.registry.register(
+            ToolSpec(
+                name="standard.fs.grep",
+                description=(
+                    "Search text files under the workspace with grep-style line "
+                    "matches and optional context. Use this instead of reading an "
+                    "entire document when looking for facts, symbols, sections, or "
+                    "evidence. Returns only matching excerpts, not full file content."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "root_id": {
+                            "type": "string",
+                            "description": "Configured root id. Use workspace.",
+                            "default": "workspace",
+                        },
+                        "relative_path": {
+                            "type": "string",
+                            "description": (
+                                "Workspace-relative file or directory to search. "
+                                "Use '.' for the whole workspace."
+                            ),
+                            "default": ".",
+                        },
+                        "pattern": {
+                            "type": "string",
+                            "description": "Regex or literal text to search for.",
+                        },
+                        "glob": {
+                            "type": "string",
+                            "description": "File glob used when relative_path is a directory.",
+                            "default": "*",
+                        },
+                        "case_sensitive": {
+                            "type": "boolean",
+                            "description": "Whether matching is case-sensitive.",
+                            "default": False,
+                        },
+                        "regex": {
+                            "type": "boolean",
+                            "description": "Treat pattern as a regular expression.",
+                            "default": True,
+                        },
+                        "context_lines": {
+                            "type": "integer",
+                            "description": "Number of lines before and after each match.",
+                            "default": 2,
+                        },
+                        "max_matches": {
+                            "type": "integer",
+                            "description": "Maximum number of matches to return.",
+                            "default": 50,
+                        },
+                    },
+                    "required": [
+                        "root_id",
+                        "relative_path",
+                        "pattern",
+                        "glob",
+                        "case_sensitive",
+                        "regex",
+                        "context_lines",
+                        "max_matches",
+                    ],
+                    "additionalProperties": False,
+                },
+                tags=("standard", "fs", "readonly", "grep"),
+                strict=True,
+                func=self._grep,
+            )
         )
         self.registry.register(
             ToolSpec(
@@ -175,6 +249,59 @@ class ToolAnythingRuntime:
         )
 
 
+    def _grep(
+        self,
+        root_id: str = "workspace",
+        relative_path: str = ".",
+        pattern: str = "",
+        glob: str = "*",
+        case_sensitive: bool = False,
+        regex: bool = True,
+        context_lines: int = 2,
+        max_matches: int = 50,
+    ) -> dict[str, Any]:
+        if root_id != "workspace":
+            raise ValueError("Only the workspace root is available.")
+        if not pattern:
+            raise ValueError("pattern is required.")
+        context = max(0, min(int(context_lines), 10))
+        limit = max(1, min(int(max_matches), 200))
+        target = _safe_workspace_path(self.root, relative_path)
+        flags = 0 if case_sensitive else re.IGNORECASE
+        compiled = re.compile(pattern if regex else re.escape(pattern), flags)
+        files = [target] if target.is_file() else sorted(target.rglob(glob or "*"))
+        matches: list[dict[str, Any]] = []
+        scanned_files = 0
+        skipped_files = 0
+        for file_path in files:
+            if len(matches) >= limit:
+                break
+            if not file_path.is_file():
+                continue
+            scanned_files += 1
+            try:
+                file_matches = _grep_file(
+                    file_path,
+                    self.root,
+                    compiled,
+                    context_lines=context,
+                    remaining_matches=limit - len(matches),
+                )
+            except OSError:
+                skipped_files += 1
+                continue
+            matches.extend(file_matches)
+        return {
+            "pattern": pattern,
+            "relative_path": relative_path,
+            "glob": glob,
+            "matches": matches,
+            "match_count": len(matches),
+            "scanned_files": scanned_files,
+            "skipped_files": skipped_files,
+            "truncated": len(matches) >= limit,
+        }
+
 def create_default_tool_runtime() -> ToolAnythingRuntime:
     repo_root = Path(__file__).resolve().parents[4]
     return ToolAnythingRuntime(repo_root)
@@ -217,3 +344,61 @@ def _truncate_jsonable(value: Any, *, max_chars: int = 1200) -> Any:
         return json.loads(summary)
     except json.JSONDecodeError:
         return summary
+
+
+
+def _safe_workspace_path(root: Path, relative_path: str) -> Path:
+    candidate = (root / relative_path).resolve()
+    if not candidate.is_relative_to(root):
+        raise ValueError("path escapes configured workspace root")
+    if not candidate.exists():
+        raise ValueError(f"path does not exist: {relative_path}")
+    return candidate
+
+
+def _relative_path(path: Path, root: Path) -> str:
+    try:
+        return path.resolve().relative_to(root).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _grep_file(
+    file_path: Path,
+    root: Path,
+    regex: re.Pattern[str],
+    *,
+    context_lines: int,
+    remaining_matches: int,
+) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    before = deque(maxlen=context_lines)
+    pending_after: list[dict[str, Any]] = []
+    relative = _relative_path(file_path, root)
+    with file_path.open("r", encoding="utf-8", errors="replace") as handle:
+        for line_number, raw_line in enumerate(handle, start=1):
+            line = raw_line.rstrip("\r\n")
+            still_pending: list[dict[str, Any]] = []
+            for pending in pending_after:
+                pending["match"]["after"].append({"line_number": line_number, "line": line})
+                pending["remaining"] -= 1
+                if pending["remaining"] > 0:
+                    still_pending.append(pending)
+            pending_after = still_pending
+
+            if len(matches) < remaining_matches and regex.search(line):
+                match = {
+                    "path": relative,
+                    "line_number": line_number,
+                    "line": line,
+                    "before": list(before),
+                    "after": [],
+                }
+                matches.append(match)
+                if context_lines:
+                    pending_after.append({"match": match, "remaining": context_lines})
+
+            before.append({"line_number": line_number, "line": line})
+            if len(matches) >= remaining_matches and not pending_after:
+                break
+    return matches

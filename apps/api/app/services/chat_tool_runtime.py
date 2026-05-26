@@ -205,8 +205,8 @@ def parallel_openai_tool() -> dict[str, Any]:
                             "recipient_name": {
                                 "type": "string",
                                 "description": (
-                                    "OpenAI function name such as standard_fs_read, "
-                                    "or canonical tool name such as standard.fs.read."
+                                    "OpenAI function name such as standard_fs_grep, "
+                                    "or canonical tool name such as standard.fs.grep."
                                 ),
                             },
                             "parameters": {

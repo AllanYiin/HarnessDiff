@@ -11,25 +11,61 @@ def test_tool_runtime_exposes_only_allowed_readonly_tools(tmp_path) -> None:
     assert set(runtime.list_tool_names()) == set(ALLOWED_TOOL_NAMES)
     assert "standard.fs.write" not in runtime.list_tool_names()
     assert "standard.fs.patch_text" not in runtime.list_tool_names()
+    assert "standard.fs.read" not in runtime.list_tool_names()
 
     openai_names = {tool["name"] for tool in runtime.list_openai_tools()}
-    assert "standard_fs_read" in openai_names
+    assert "standard_fs_read" not in openai_names
+    assert "standard_fs_grep" in openai_names
     assert "standard_web_fetch" in openai_names
     assert "standard_shell_bash" in openai_names
 
 
 def test_tool_runtime_invokes_filesystem_and_data_tools(tmp_path) -> None:
     (tmp_path / "sample.txt").write_text('{"name": "HarnessDiff"}\n', encoding="utf-8")
+    (tmp_path / "notes.txt").write_text("before\nneedle\n after\n", encoding="utf-8")
     runtime = ToolAnythingRuntime(tmp_path)
 
-    read_result = asyncio.run(
+    grep_result = asyncio.run(
         runtime.invoke_openai_tool(
-            "standard_fs_read",
-            {"root_id": "workspace", "relative_path": "sample.txt"},
+            "standard_fs_grep",
+            {
+                "root_id": "workspace",
+                "relative_path": "sample.txt",
+                "pattern": "HarnessDiff",
+                "glob": "*",
+                "case_sensitive": True,
+                "regex": False,
+                "context_lines": 0,
+                "max_matches": 10,
+            },
         )
     )
-    assert read_result.ok is True
-    assert "HarnessDiff" in read_result.result["content"]
+    assert grep_result.ok is True
+    assert grep_result.result["matches"][0]["line"] == '{"name": "HarnessDiff"}'
+    assert "content" not in grep_result.result
+
+    context_result = asyncio.run(
+        runtime.invoke_openai_tool(
+            "standard_fs_grep",
+            {
+                "root_id": "workspace",
+                "relative_path": "notes.txt",
+                "pattern": "needle",
+                "glob": "*",
+                "case_sensitive": True,
+                "regex": False,
+                "context_lines": 1,
+                "max_matches": 10,
+            },
+        )
+    )
+    assert context_result.ok is True
+    assert context_result.result["matches"][0]["before"] == [
+        {"line_number": 1, "line": "before"}
+    ]
+    assert context_result.result["matches"][0]["after"] == [
+        {"line_number": 3, "line": " after"}
+    ]
 
     parse_result = asyncio.run(
         runtime.invoke_openai_tool(
@@ -46,13 +82,22 @@ def test_tool_runtime_blocks_filesystem_escape(tmp_path) -> None:
 
     result = asyncio.run(
         runtime.invoke_openai_tool(
-            "standard_fs_read",
-            {"root_id": "workspace", "relative_path": "../outside.txt"},
+            "standard_fs_grep",
+            {
+                "root_id": "workspace",
+                "relative_path": "../outside.txt",
+                "pattern": "outside",
+                "glob": "*",
+                "case_sensitive": False,
+                "regex": False,
+                "context_lines": 0,
+                "max_matches": 10,
+            },
         )
     )
 
     assert result.ok is False
-    assert "path escapes configured root" in result.error["message"]
+    assert "path escapes configured workspace root" in result.error["message"]
 
 
 def test_tool_runtime_invokes_readonly_bash_tool(tmp_path) -> None:
