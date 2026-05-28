@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/github_repo.iml" filepath="$PROJECT_DIR$/.idea/github_repo.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/harnessdiff.iml" filepath="$PROJECT_DIR$/.idea/harnessdiff.iml" />
     </modules>
   </component>
 </project>
