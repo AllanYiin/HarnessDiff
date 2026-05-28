@@ -18,6 +18,7 @@ def test_tool_runtime_exposes_only_allowed_readonly_tools(tmp_path) -> None:
     assert "standard_fs_grep" in openai_names
     assert "standard_web_fetch" in openai_names
     assert "standard_shell_bash" in openai_names
+    assert "standard_code_container_exec" in openai_names
 
 
 def test_tool_runtime_invokes_filesystem_and_data_tools(tmp_path) -> None:
@@ -43,6 +44,9 @@ def test_tool_runtime_invokes_filesystem_and_data_tools(tmp_path) -> None:
     assert grep_result.ok is True
     assert grep_result.result["matches"][0]["line"] == '{"name": "HarnessDiff"}'
     assert "content" not in grep_result.result
+    event_payload = grep_result.event_payload()
+    assert event_payload["token_usage"]["source"] == "estimated"
+    assert event_payload["token_usage"]["total_tokens"] > 0
 
     context_result = asyncio.run(
         runtime.invoke_openai_tool(
@@ -127,6 +131,21 @@ def test_tool_runtime_invokes_readonly_bash_tool(tmp_path) -> None:
     )
     assert find_result.ok is True
     assert "sample.py" in find_result.result["stdout"]
+
+
+def test_tool_runtime_invokes_container_code_tool_validation(tmp_path) -> None:
+    runtime = ToolAnythingRuntime(tmp_path)
+
+    result = asyncio.run(
+        runtime.invoke_openai_tool(
+            "standard_code_container_exec",
+            {"command": "python3 --version", "workdir": "../outside"},
+        )
+    )
+
+    assert result.ok is True
+    assert result.result["exit_code"] == 127
+    assert result.result["error"]["type"] == "invalid_workdir"
 
 
 def test_tool_runtime_readonly_bash_rejects_mutation_and_escape(tmp_path) -> None:

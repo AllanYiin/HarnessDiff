@@ -528,10 +528,27 @@ def test_deterministic_skill_match_is_used_when_llm_selector_returns_empty(tmp_p
     ).json()
     with client.stream("GET", f"/api/runs/{run['id']}/stream") as response:
         assert response.status_code == 200
-        _ = "".join(response.iter_text())
+        events = _sse_events("".join(response.iter_text()))
 
     assert len(provider.skill_selection_requests) == 1
     assert all("# Earnings workflow" in request.instructions for request in provider.requests)
+    assert any(
+        event["type"] == "skill_invocation"
+        and event["profile_id"] == "baseline"
+        and event["skill_id"] == "earnings-call-interpretation"
+        and event["status"] == "loaded"
+        and event["token_usage"]["source"] == "estimated"
+        and event["token_usage"]["total_tokens"] > 0
+        for event in events
+    )
+    analysis = client.get(f"/api/runs/{run['id']}/analysis").json()
+    baseline_sections = analysis["profiles"]["baseline"]["context_sections"]
+    activated_skills = next(
+        section for section in baseline_sections if section["key"] == "activated_skills"
+    )
+    assert activated_skills["status"] == "sent"
+    assert activated_skills["characters"] > 0
+    assert "skills" in analysis["profiles"]["baseline"]["provider_context_keys"]
     run_dir = tmp_path / "data" / "projects" / project_id / "runs" / run["id"]
     baseline_events = [
         json.loads(line)
@@ -1009,6 +1026,8 @@ def test_harness_subagent_tool_call_writes_artifacts_and_usage_rollup(tmp_path) 
     assert streamed_tool_call["tool_call"]["tool_name"] == "harness.subagent.run"
     assert streamed_tool_call["tool_call"]["subagent_id"] == "researcher"
     assert streamed_tool_call["tool_call"]["arguments"]["subagent_id"] == "researcher"
+    assert streamed_tool_call["tool_call"]["token_usage"]["source"] == "provider_reported"
+    assert streamed_tool_call["tool_call"]["token_usage"]["total_tokens"] == 20
     assert "research notes" in streamed_tool_call["tool_call"]["result_summary"]
     assert any(event["type"] == "delta" and event["text"] == "final answer" for event in events)
     assert any(tool["name"] == "harness_subagent_run" for tool in openai_client.calls[0]["tools"])
@@ -1152,6 +1171,104 @@ def test_harness_subagent_tool_loads_custom_agent_definition_from_home(tmp_path)
     assert harness["subagent_usage_total"]["total_tokens"] == 12
     assert harness["caller_usage_total"]["total_tokens"] == 27
     assert harness["subagents"]["analyst"]["current_turn_usage"]["total_tokens"] == 12
+
+
+def test_web_researcher_subagent_receives_only_declared_web_tools(tmp_path) -> None:
+    home = tmp_path / "home"
+    agents_dir = home / "agents"
+    agents_dir.mkdir(parents=True)
+    (home / "AGENTS.md").write_text("# Local policy\n", encoding="utf-8")
+    (agents_dir / "web-researcher.md").write_text(
+        "---\n"
+        "id: web-researcher\n"
+        "label: Web Researcher\n"
+        "description: Research delegated web tasks.\n"
+        "tools: WebSearch, WebFetch\n"
+        "model: custom-web-model\n"
+        "---\n"
+        "Return concise web notes.",
+        encoding="utf-8",
+    )
+    openai_client = FakeOpenAIClient(
+        [
+            [
+                FakeEvent(
+                    type="response.completed",
+                    response=FakeResponse(
+                        id="resp_tool",
+                        output=[
+                            {
+                                "type": "function_call",
+                                "name": "harness_subagent_run",
+                                "call_id": "call_subagent",
+                                "arguments": json.dumps(
+                                    {
+                                        "subagent_id": "web-researcher",
+                                        "task": "Research the topic",
+                                        "context": "",
+                                    }
+                                ),
+                            }
+                        ],
+                    ),
+                )
+            ],
+            [
+                FakeEvent(type="response.output_text.delta", delta="web notes"),
+                FakeEvent(
+                    type="response.completed",
+                    response=FakeResponse(
+                        id="resp_sub",
+                        output=[],
+                        usage={"input_tokens": 8, "output_tokens": 6, "total_tokens": 14},
+                    ),
+                ),
+            ],
+            [
+                FakeEvent(type="response.output_text.delta", delta="final"),
+                FakeEvent(
+                    type="response.completed",
+                    response=FakeResponse(
+                        id="resp_final",
+                        output=[],
+                        usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                    ),
+                ),
+            ],
+        ]
+    )
+    provider = OpenAIResponsesProvider(api_key="test", client_factory=lambda: openai_client)
+    client = TestClient(
+        create_app(
+            data_dir=tmp_path / "data",
+            harnessdiff_home=home,
+            llm_provider=provider,
+        )
+    )
+    project_id = client.post("/api/projects", json={"name": "Web subagent"}).json()["id"]
+    run = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "delegate web research",
+            "input_mode": "integrated",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+            "profiles": [
+                {"id": "harness", "label": "Harness", "harness_modules": {"tool_policy": True}}
+            ],
+        },
+    ).json()
+
+    with client.stream("GET", f"/api/runs/{run['id']}/stream") as response:
+        assert response.status_code == 200
+        _sse_events("".join(response.iter_text()))
+
+    subagent_call = openai_client.calls[1]
+    subagent_tool_names = {tool["name"] for tool in subagent_call["tools"]}
+    assert {"standard_web_search", "standard_web_fetch"} <= subagent_tool_names
+    assert "standard_shell_bash" not in subagent_tool_names
+    assert "harness_subagent_run" not in subagent_tool_names
+    assert "exactly 5 distinct search query principles" in subagent_call["input"][0]["content"]
 
 
 def test_harnessable_block_stops_only_controlled_profile(tmp_path) -> None:

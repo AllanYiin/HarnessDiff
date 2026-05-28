@@ -24,6 +24,7 @@ from app.services.harnessable_control import HarnessableControlPlane
 from app.services.skill_store import REQUESTED_SKILL_DETAILS_MARKER, SkillStore
 from app.services.subagent_definitions import DEFAULT_SUBAGENTS
 from app.services.subagent_runtime import SubagentToolRuntime
+from app.services.tool_runtime import _estimate_text_tokens
 from app.services.tool_runtime import ToolAnythingRuntime
 from app.storage.json_io import write_json_atomic
 from app.storage.project_store import ProjectStore
@@ -57,6 +58,7 @@ class RunOrchestrator:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         profile_errors: list[dict[str, Any]] = []
         selected_skill_ids = await self._select_skill_ids_for_run(run)
+        skill_token_usage = self._skill_token_usage(selected_skill_ids)
 
         async def run_profile(profile) -> None:
             try:
@@ -96,6 +98,7 @@ class RunOrchestrator:
                             run=run,
                             profile=profile,
                             definitions=subagent_definitions,
+                            standard_runtime=self.tool_runtime,
                         ),
                         excluded_tool_names=()
                         if has_full_tools
@@ -137,8 +140,26 @@ class RunOrchestrator:
                     prompt_cache_key,
                 )
                 for sequence, skill_id in enumerate(selected_skill_ids):
+                    token_usage = skill_token_usage.get(skill_id, {})
                     self.store.append_skill_invocation_event(
-                        run.project_id, run.id, profile.id, sequence, skill_id
+                        run.project_id,
+                        run.id,
+                        profile.id,
+                        sequence,
+                        skill_id,
+                        token_usage=token_usage,
+                    )
+                    await queue.put(
+                        {
+                            "run_id": run.id,
+                            "profile_id": profile.id,
+                            "profile_label": profile.label,
+                            "type": "skill_invocation",
+                            "sequence": sequence,
+                            "skill_id": skill_id,
+                            "status": "loaded",
+                            "token_usage": token_usage,
+                        }
                     )
                 gate = self.control_plane.evaluate_before_provider(run, profile, instructions)
                 for sequence, decision in enumerate(gate.decisions):
@@ -277,6 +298,21 @@ class RunOrchestrator:
                 max_selected=3,
             )
         return _merge_selected_skill_ids(explicit_ids, fallback_ids, max_selected=3)
+
+    def _skill_token_usage(self, skill_ids: tuple[str, ...]) -> dict[str, dict[str, Any]]:
+        if self.skill_store is None or not skill_ids:
+            return {}
+        usage: dict[str, dict[str, Any]] = {}
+        for activation in self.skill_store.activations_for_skill_ids(skill_ids):
+            input_tokens = _estimate_text_tokens(activation.content)
+            usage[activation.id] = {
+                "source": "estimated",
+                "basis": "skill_md_characters_div_4",
+                "input_tokens": input_tokens,
+                "output_tokens": 0,
+                "total_tokens": input_tokens,
+            }
+        return usage
 
 
 def sse_encode(payload: dict[str, Any]) -> str:

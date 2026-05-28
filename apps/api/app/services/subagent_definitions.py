@@ -15,7 +15,20 @@ class SubagentDefinition:
     model: str = "gpt-5.4-mini"
     reasoning_effort: str = "medium"
     max_output_chars: int = 4000
+    tools: tuple[str, ...] = ()
     enabled: bool = True
+
+
+SUBAGENT_TOOL_ALIASES: dict[str, str] = {
+    "websearch": "standard.web.search",
+    "webfetch": "standard.web.fetch",
+    "webextracttext": "standard.web.extract_text",
+    "webextractlinks": "standard.web.extract_links",
+    "standard.web.search": "standard.web.search",
+    "standard.web.fetch": "standard.web.fetch",
+    "standard.web.extract_text": "standard.web.extract_text",
+    "standard.web.extract_links": "standard.web.extract_links",
+}
 
 
 DEFAULT_SUBAGENTS: tuple[SubagentDefinition, ...] = (
@@ -30,6 +43,18 @@ DEFAULT_SUBAGENTS: tuple[SubagentDefinition, ...] = (
             "Use 3-5 concise bullet findings with source URLs when sources are provided. "
             "Do not speculate beyond the supplied sources; if information is not found, say so clearly."
         ),
+    ),
+    SubagentDefinition(
+        id="web-researcher",
+        label="Web Researcher",
+        description="Search and fetch web sources, then return concise source-grounded notes.",
+        instructions=(
+            "You are a web research specialist subagent inside HarnessDiff. "
+            "Research only the delegated task. Return notes, not raw search results or full page text. "
+            "Use 3-5 concise bullet findings with source URLs. "
+            "Do not speculate beyond fetched or searched sources; if information is not found, say so clearly."
+        ),
+        tools=("standard.web.search", "standard.web.fetch"),
     ),
     SubagentDefinition(
         id="critic",
@@ -104,6 +129,7 @@ def definition_to_markdown(definition: SubagentDefinition) -> str:
         f"model: {definition.model}\n"
         f"reasoning_effort: {definition.reasoning_effort}\n"
         f"max_output_chars: {definition.max_output_chars}\n"
+        f"{_tools_frontmatter(definition.tools)}"
         f"enabled: {str(definition.enabled).lower()}\n"
         "---\n"
         f"{definition.instructions}\n"
@@ -139,6 +165,7 @@ def _definition_from_data(data: dict[str, object], *, fallback_id: str) -> Subag
         model=str(data.get("model") or "gpt-5.4-mini").strip() or "gpt-5.4-mini",
         reasoning_effort=str(data.get("reasoning_effort") or "medium").strip() or "medium",
         max_output_chars=_as_int(data.get("max_output_chars"), default=4000),
+        tools=normalize_subagent_tools(data.get("tools")),
         enabled=_as_bool(data.get("enabled"), default=True),
     )
 
@@ -180,3 +207,32 @@ def _as_int(value: object, *, default: int) -> int:
         except ValueError:
             return default
     return default
+
+
+def normalize_subagent_tools(value: object) -> tuple[str, ...]:
+    raw_items: list[object]
+    if isinstance(value, (list, tuple)):
+        raw_items = list(value)
+    elif isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return ()
+        raw_items = re.split(r"[,;\s]+", stripped)
+    else:
+        return ()
+
+    tools: list[str] = []
+    for item in raw_items:
+        normalized = str(item).strip().strip("[]\"'").lower()
+        if not normalized:
+            continue
+        tool_name = SUBAGENT_TOOL_ALIASES.get(normalized)
+        if tool_name is not None and tool_name not in tools:
+            tools.append(tool_name)
+    return tuple(tools)
+
+
+def _tools_frontmatter(tools: tuple[str, ...]) -> str:
+    if not tools:
+        return ""
+    return f"tools: {', '.join(tools)}\n"

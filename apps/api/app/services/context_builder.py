@@ -19,7 +19,9 @@ HARNESS_MODULE_INSTRUCTIONS = {
         "Prefer available tools for verification. For requests about current, external, "
         "web, file, or data facts, call the available tools before answering; only say a "
         "needed tool result is unavailable after a tool returns an error or no suitable "
-        "tool is present."
+        "tool is present. Use the container code tool for Python, Node.js, React, tests, "
+        "builds, and other executable development checks. Use the read-only shell tool "
+        "for lightweight repository inspection."
     ),
     "memory_selection": "Use only memory or preference details that are relevant to this turn.",
     "post_answer_critique": "End with a short self-check when the task has meaningful risk or ambiguity.",

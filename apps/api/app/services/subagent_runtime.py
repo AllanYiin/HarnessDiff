@@ -12,7 +12,10 @@ from app.services.subagent_definitions import (
     enabled_subagents,
     subagent_by_id,
 )
+from app.services.tool_runtime import ToolInvocationRecord
 from app.services.tool_runtime import _elapsed_ms, _json_summary, _truncate_jsonable
+from app.services.tool_runtime import _estimated_tool_token_usage
+from app.services.tool_runtime import ToolAnythingRuntime
 from app.storage.project_store import ProjectStore
 
 SUBAGENT_TOOL_NAME = "harness.subagent.run"
@@ -51,6 +54,7 @@ class SubagentToolInvocationRecord:
         }
 
     def event_payload(self) -> dict[str, Any]:
+        output_payload = self.output_payload()
         payload = {
             "ok": self.ok,
             "tool_name": self.name,
@@ -59,6 +63,9 @@ class SubagentToolInvocationRecord:
             "elapsed_ms": self.elapsed_ms,
             "subagent_id": self.subagent_id,
             "subagent_label": self.subagent_label,
+            "token_usage": _provider_or_estimated_usage(
+                self.usage, self.arguments, output_payload
+            ),
         }
         if self.ok:
             payload["result_summary"] = _json_summary(
@@ -78,12 +85,14 @@ class SubagentToolRuntime:
         run: RunDocument,
         profile: ProfileConfig,
         definitions: tuple[SubagentDefinition, ...] = DEFAULT_SUBAGENTS,
+        standard_runtime: ToolAnythingRuntime | None = None,
     ) -> None:
         self.provider = provider
         self.store = store
         self.run = run
         self.profile = profile
         self.definitions = definitions
+        self.standard_runtime = standard_runtime
 
     async def invoke(
         self, openai_name: str, arguments: dict[str, Any]
@@ -113,7 +122,13 @@ class SubagentToolRuntime:
                 message="Subagent task is required.",
             )
 
-        prompt = _subagent_prompt(task, context)
+        tool_context = self._tool_context_for(definition)
+        prompt = _subagent_prompt(
+            task,
+            context,
+            definition,
+            tools_enabled=tool_context is not None,
+        )
         self.store.prepare_subagent_run(
             self.run.project_id,
             self.run.id,
@@ -133,8 +148,8 @@ class SubagentToolRuntime:
             reasoning_effort=definition.reasoning_effort,
             instructions=definition.instructions,
             prompt=prompt,
-            tools_enabled=False,
-            tool_context=None,
+            tools_enabled=tool_context is not None,
+            tool_context=tool_context,
             subagent_id=definition.id,
             subagent_label=definition.label,
             parent_profile_id=self.profile.id,
@@ -244,6 +259,49 @@ class SubagentToolRuntime:
             error={"type": error_type, "message": message},
         )
 
+    def _tool_context_for(self, definition: SubagentDefinition) -> "SubagentToolContext | None":
+        if self.standard_runtime is None or not definition.tools:
+            return None
+        allowed = tuple(
+            tool_name
+            for tool_name in definition.tools
+            if tool_name in self.standard_runtime.list_tool_names()
+        )
+        if not allowed:
+            return None
+        return SubagentToolContext(
+            standard_runtime=self.standard_runtime,
+            allowed_tool_names=allowed,
+        )
+
+
+class SubagentToolContext:
+    def __init__(
+        self,
+        *,
+        standard_runtime: ToolAnythingRuntime,
+        allowed_tool_names: tuple[str, ...],
+    ) -> None:
+        self.standard_runtime = standard_runtime
+        self.allowed_tool_names = tuple(dict.fromkeys(allowed_tool_names))
+
+    def list_openai_tools(self) -> list[dict[str, Any]]:
+        return [
+            tool
+            for tool in self.standard_runtime.list_openai_tools()
+            if self.standard_runtime.from_openai_name(str(tool.get("name") or ""))
+            in self.allowed_tool_names
+        ]
+
+    def list_tool_names(self) -> tuple[str, ...]:
+        return self.allowed_tool_names
+
+    async def invoke_openai_tool(self, openai_name: str, arguments: dict[str, Any]) -> Any:
+        original_name = self.standard_runtime.from_openai_name(openai_name)
+        if original_name not in self.allowed_tool_names:
+            return _subagent_tool_not_allowed(openai_name, original_name, arguments)
+        return await self.standard_runtime.invoke_openai_tool(openai_name, arguments)
+
 
 def subagent_openai_tool() -> dict[str, Any]:
     return subagent_openai_tool_for_definitions(DEFAULT_SUBAGENTS)
@@ -284,14 +342,22 @@ def subagent_openai_tool_for_definitions(
     }
 
 
-def _subagent_prompt(task: str, context: str) -> str:
+def _subagent_prompt(
+    task: str,
+    context: str,
+    definition: SubagentDefinition,
+    *,
+    tools_enabled: bool,
+) -> str:
     context_text = context if context else "(no additional context provided)"
+    tool_text = _subagent_tool_prompt(definition) if tools_enabled else "Do not call tools."
     return (
         "Delegated task:\n"
         f"{task}\n\n"
         "Context supplied by manager:\n"
         f"{context_text}\n\n"
-        "Return only the result the manager needs. Do not call tools."
+        f"{tool_text}\n\n"
+        "Return only the result the manager needs."
     )
 
 
@@ -299,6 +365,63 @@ def _truncate_text(text: str, max_chars: int) -> str:
     if max_chars <= 0 or len(text) <= max_chars:
         return text
     return text[: max_chars - 3] + "..."
+
+
+def _provider_or_estimated_usage(
+    usage: dict[str, Any] | None,
+    arguments: dict[str, Any],
+    output_payload: dict[str, Any],
+) -> dict[str, Any]:
+    if usage:
+        return {
+            "source": "provider_reported",
+            "input_tokens": _as_int(usage.get("input_tokens")),
+            "cached_tokens": _as_int(usage.get("cached_tokens")),
+            "output_tokens": _as_int(usage.get("output_tokens")),
+            "reasoning_tokens": _as_int(usage.get("reasoning_tokens")),
+            "total_tokens": _as_int(usage.get("total_tokens")),
+        }
+    return _estimated_tool_token_usage(arguments, output_payload)
+
+
+def _as_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    return 0
+
+
+def _subagent_tool_prompt(definition: SubagentDefinition) -> str:
+    if "standard.web.search" in definition.tools:
+        return (
+            "Use the delegated web tools directly. Workflow:\n"
+            "1. Derive exactly 5 distinct search query principles for the delegated task.\n"
+            "2. Run one web search for each query principle.\n"
+            "3. Merge and deduplicate candidate URLs before opening pages.\n"
+            "4. Fetch only the unique, relevant URLs needed to answer the task.\n"
+            "5. Produce concise notes grounded only in fetched/search result sources, with source URLs.\n"
+            "Do not return raw search results, full page text, or long quotes."
+        )
+    return "Use only the delegated tools needed for this task."
+
+
+def _subagent_tool_not_allowed(
+    openai_name: str, tool_name: str, arguments: dict[str, Any]
+) -> ToolInvocationRecord:
+    return ToolInvocationRecord(
+        ok=False,
+        name=tool_name,
+        openai_name=openai_name,
+        arguments=arguments,
+        elapsed_ms=0,
+        error={
+            "type": "tool_not_allowed",
+            "message": f"Tool is not enabled for this subagent: {tool_name}",
+        },
+    )
 
 
 def _with_subagent_identity(

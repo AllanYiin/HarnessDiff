@@ -168,6 +168,55 @@ def test_subagent_runtime_writes_artifacts_and_analysis_usage_totals(tmp_path) -
     assert profile_analysis.subagents["researcher"].current_turn_usage.total_tokens == 15
 
 
+def test_subagent_runtime_enables_declared_web_tools(tmp_path) -> None:
+    store, run, profile = _create_harness_run(tmp_path)
+    provider = ScriptedSubagentProvider()
+    runtime = SubagentToolRuntime(
+        provider=provider,
+        store=store,
+        run=run,
+        profile=profile,
+        standard_runtime=FakeWebStandardRuntime(),
+        definitions=(
+            SubagentDefinition(
+                id="web-researcher",
+                label="Web Researcher",
+                description="Research the web",
+                instructions="Use web evidence only.",
+                model="fake-model",
+                reasoning_effort="low",
+                tools=("standard.web.search", "standard.web.fetch"),
+            ),
+        ),
+    )
+
+    result = asyncio.run(
+        runtime.invoke(
+            SUBAGENT_OPENAI_NAME,
+            {"subagent_id": "web-researcher", "task": "Find sources", "context": ""},
+        )
+    )
+
+    assert result.ok is True
+    request = provider.requests[0]
+    assert request.tools_enabled is True
+    assert request.tool_context is not None
+    assert request.tool_context.list_tool_names() == (
+        "standard.web.search",
+        "standard.web.fetch",
+    )
+    assert {tool["name"] for tool in request.tool_context.list_openai_tools()} == {
+        "standard_web_search",
+        "standard_web_fetch",
+    }
+    assert "exactly 5 distinct search query principles" in request.prompt
+    assert "Do not call tools." not in request.prompt
+
+    disallowed = asyncio.run(request.tool_context.invoke_openai_tool("standard_fs_read", {}))
+    assert disallowed.output_payload()["ok"] is False
+    assert disallowed.output_payload()["error"]["type"] == "tool_not_allowed"
+
+
 def test_subagent_runtime_returns_structured_error_for_unknown_subagent(tmp_path) -> None:
     store, run, profile = _create_harness_run(tmp_path)
     runtime = SubagentToolRuntime(
@@ -277,6 +326,28 @@ class FakeStandardRuntime:
     async def invoke_openai_tool(self, openai_name, arguments):
         self.calls.append((openai_name, arguments))
         return FakeInvocation("standard.fs.read")
+
+
+class FakeWebStandardRuntime:
+    def list_openai_tools(self):
+        return [
+            {"type": "function", "name": "standard_web_search", "parameters": {}},
+            {"type": "function", "name": "standard_web_fetch", "parameters": {}},
+            {"type": "function", "name": "standard_fs_read", "parameters": {}},
+        ]
+
+    def list_tool_names(self):
+        return ("standard.web.search", "standard.web.fetch", "standard.fs.read")
+
+    def from_openai_name(self, openai_name):
+        return {
+            "standard_web_search": "standard.web.search",
+            "standard_web_fetch": "standard.web.fetch",
+            "standard_fs_read": "standard.fs.read",
+        }.get(openai_name, openai_name)
+
+    async def invoke_openai_tool(self, openai_name, arguments):
+        return FakeInvocation(self.from_openai_name(openai_name))
 
 
 class FakeSubagentRuntime:

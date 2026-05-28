@@ -63,6 +63,16 @@ def test_project_transcript_returns_runs_and_outputs(tmp_path) -> None:
             "model": "fake-model",
             "reasoning_effort": "medium",
             "profiles": [{"id": "baseline", "label": "NoHarness", "harness_modules": {}}],
+            "attachments": [
+                {
+                    "kind": "image",
+                    "name": "screen.png",
+                    "mime_type": "image/png",
+                    "size_bytes": 12,
+                    "image_url": "data:image/png;base64,abc",
+                    "detail": "auto",
+                }
+            ],
         },
     ).json()
     run_dir = tmp_path / "projects" / project_id / "runs" / run["id"] / "baseline"
@@ -78,6 +88,16 @@ def test_project_transcript_returns_runs_and_outputs(tmp_path) -> None:
     doc = response.json()
     assert doc["project"]["id"] == project_id
     assert doc["runs"][0]["prompt"] == "hello"
+    assert doc["runs"][0]["attachments"] == [
+        {
+            "kind": "image",
+            "name": "screen.png",
+            "mime_type": "image/png",
+            "size_bytes": 12,
+            "image_url": "data:image/png;base64,abc",
+            "detail": "auto",
+        }
+    ]
     assert doc["runs"][0]["profiles"][0]["id"] == "baseline"
     assert doc["runs"][0]["profiles"][0]["output_text"] == "answer"
 

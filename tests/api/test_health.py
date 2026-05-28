@@ -20,6 +20,9 @@ def test_health_route_returns_stage0_metadata(tmp_path) -> None:
     assert body["tools"]["enabled"] is True
     assert "standard.web.search" in body["tools"]["names"]
     assert "standard.shell.bash" in body["tools"]["names"]
+    assert "standard.code.container_exec" in body["tools"]["names"]
     assert "harness.subagent.run" in body["tools"]["names"]
     assert "multi_tool_use.parallel" in body["tools"]["names"]
     assert isinstance(body["tools"]["web_search_configured"], bool)
+    assert isinstance(body["tools"]["container_runtime"]["docker_found"], bool)
+    assert body["tools"]["container_runtime"]["image"] == "harnessdiff-code-runtime:latest"

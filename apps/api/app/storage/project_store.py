@@ -273,7 +273,13 @@ class ProjectStore:
         )
 
     def append_skill_invocation_event(
-        self, project_id: str, run_id: str, profile_id: str, sequence: int, skill_id: str
+        self,
+        project_id: str,
+        run_id: str,
+        profile_id: str,
+        sequence: int,
+        skill_id: str,
+        token_usage: dict[str, Any] | None = None,
     ) -> None:
         self._append_jsonl(
             self._run_dir(project_id, run_id) / profile_id / "events.jsonl",
@@ -283,6 +289,7 @@ class ProjectStore:
                 "profile_id": profile_id,
                 "sequence": sequence,
                 "skill_id": skill_id,
+                "token_usage": token_usage or {},
                 "created_at": utc_now_iso(),
             },
         )

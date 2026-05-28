@@ -12,12 +12,18 @@ from app.services.subagent_runtime import (
     SubagentToolRuntime,
     subagent_openai_tool_for_definitions,
 )
-from app.services.tool_runtime import ToolAnythingRuntime, _elapsed_ms, _json_summary
+from app.services.container_code_runtime import CONTAINER_CODE_TOOL_NAME
+from app.services.tool_runtime import (
+    ToolAnythingRuntime,
+    _elapsed_ms,
+    _estimated_tool_token_usage,
+    _json_summary,
+)
 
 
 PARALLEL_TOOL_NAME = "multi_tool_use.parallel"
 PARALLEL_OPENAI_NAME = "multi_tool_use_parallel"
-TOOL_NAME_PRIORITY: tuple[str, ...] = ("standard.shell.bash",)
+TOOL_NAME_PRIORITY: tuple[str, ...] = ("standard.shell.bash", CONTAINER_CODE_TOOL_NAME)
 
 
 @dataclass(frozen=True)
@@ -36,12 +42,14 @@ class ParallelToolInvocationRecord:
         return {"ok": False, "tool_name": self.name, "error": self.error or {}}
 
     def event_payload(self) -> dict[str, Any]:
+        output_payload = self.output_payload()
         payload = {
             "ok": self.ok,
             "tool_name": self.name,
             "openai_name": self.openai_name,
             "arguments": self.arguments,
             "elapsed_ms": self.elapsed_ms,
+            "token_usage": _estimated_tool_token_usage(self.arguments, output_payload),
         }
         if self.ok:
             payload["result_summary"] = _json_summary({"results": self.results})

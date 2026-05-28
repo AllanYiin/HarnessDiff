@@ -8,6 +8,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.services.container_code_runtime import (
+    CONTAINER_CODE_TOOL_NAME,
+    ContainerCodeExecutor,
+)
 from app.services.read_only_bash import ReadOnlyBashExecutor
 
 
@@ -25,6 +29,7 @@ ALLOWED_TOOL_NAMES: tuple[str, ...] = (
     "standard.data.csv_inspect",
     "standard.data.jsonl_inspect",
     "standard.shell.bash",
+    CONTAINER_CODE_TOOL_NAME,
 )
 
 
@@ -44,12 +49,14 @@ class ToolInvocationRecord:
         return {"ok": False, "tool_name": self.name, "error": self.error or {}}
 
     def event_payload(self) -> dict[str, Any]:
+        output_payload = self.output_payload()
         payload = {
             "ok": self.ok,
             "tool_name": self.name,
             "openai_name": self.openai_name,
             "arguments": _truncate_jsonable(self.arguments),
             "elapsed_ms": self.elapsed_ms,
+            "token_usage": _estimated_tool_token_usage(self.arguments, output_payload),
         }
         if self.ok:
             payload["result_summary"] = _json_summary(self.result)
@@ -73,6 +80,7 @@ class ToolAnythingRuntime:
         self.allowed_tool_names = tuple(allowed_tool_names)
         self.registry = ToolRegistry()
         self.bash_executor = ReadOnlyBashExecutor(self.root)
+        self.container_executor = ContainerCodeExecutor(self.root)
         register_standard_tools(
             self.registry,
             StandardToolOptions(
@@ -181,6 +189,47 @@ class ToolAnythingRuntime:
                 func=self.bash_executor.run,
             )
         )
+        self.registry.register(
+            ToolSpec(
+                name=CONTAINER_CODE_TOOL_NAME,
+                description=(
+                    "Run a development command in an offline Docker container using "
+                    "a temporary copy of the workspace. The runtime includes Python, "
+                    "Node.js, npm, pnpm, bash, git, ripgrep, jq, and curl. Use it for "
+                    "Python scripts, Node/React checks, tests, and builds. The "
+                    "container has no network access and does not modify the original "
+                    "workspace."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": (
+                                "Shell command to run inside the temporary workspace copy."
+                            ),
+                        },
+                        "workdir": {
+                            "type": "string",
+                            "description": (
+                                "Workspace-relative directory to run from. Defaults to '.'."
+                            ),
+                        },
+                        "timeout_seconds": {
+                            "type": "integer",
+                            "description": (
+                                "Command timeout in seconds. Defaults to 120 and is capped at 300."
+                            ),
+                        },
+                    },
+                    "required": ["command"],
+                    "additionalProperties": False,
+                },
+                tags=("standard", "code", "container"),
+                strict=True,
+                func=self.container_executor.run,
+            )
+        )
         for spec in list(self.registry.list()):
             if spec.name not in self.allowed_tool_names:
                 self.registry.unregister(spec.name)
@@ -248,7 +297,6 @@ class ToolAnythingRuntime:
             result=result,
         )
 
-
     def _grep(
         self,
         root_id: str = "workspace",
@@ -302,6 +350,7 @@ class ToolAnythingRuntime:
             "truncated": len(matches) >= limit,
         }
 
+
 def create_default_tool_runtime() -> ToolAnythingRuntime:
     repo_root = Path(__file__).resolve().parents[4]
     return ToolAnythingRuntime(repo_root)
@@ -345,6 +394,31 @@ def _truncate_jsonable(value: Any, *, max_chars: int = 1200) -> Any:
     except json.JSONDecodeError:
         return summary
 
+
+def _estimated_json_tokens(value: Any) -> int:
+    try:
+        text = json.dumps(value, ensure_ascii=False, default=str)
+    except TypeError:
+        text = repr(value)
+    return _estimate_text_tokens(text)
+
+
+def _estimate_text_tokens(text: str) -> int:
+    if not text:
+        return 0
+    return max(1, (len(text) + 3) // 4)
+
+
+def _estimated_tool_token_usage(arguments: Any, output_payload: Any) -> dict[str, Any]:
+    input_tokens = _estimated_json_tokens(arguments)
+    output_tokens = _estimated_json_tokens(output_payload)
+    return {
+        "source": "estimated",
+        "basis": "json_characters_div_4",
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+    }
 
 
 def _safe_workspace_path(root: Path, relative_path: str) -> Path:

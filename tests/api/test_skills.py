@@ -28,6 +28,7 @@ def test_create_app_initializes_harnessdiff_home(tmp_path) -> None:
     assert (home / "AGENTS.md").exists()
     assert (home / "agents.md").exists()
     assert (home / "agents" / "researcher.md").exists()
+    assert (home / "agents" / "web-researcher.md").exists()
     assert (home / "agents" / "critic.md").exists()
     assert (home / "agents" / "summarizer.md").exists()
     assert body["skills"] == []
@@ -130,9 +131,8 @@ def test_codex_style_skill_discovery_scans_project_and_user_scopes(tmp_path) -> 
     store = SkillStore(home_dir=home, repo_root=repo_root)
     skills = store.list_skills()
 
-    assert [skill.name for skill in skills] == ["agent-skill", "shared-skill", "shared-skill"]
+    assert [skill.name for skill in skills] == ["agent-skill", "shared-skill"]
     assert skills[1].id == "shared-skill"
-    assert skills[2].id.startswith("shared-skill--")
     assert all(skill.name != "disabled-skill" for skill in skills)
 
     manifest = store.context_manifest()
@@ -144,6 +144,43 @@ def test_codex_style_skill_discovery_scans_project_and_user_scopes(tmp_path) -> 
     detail = store.read_skill("shared-skill")
     assert "# Project" in detail["content"]
     assert detail["scope"] == "project"
+
+
+def test_duplicate_user_skill_names_keep_highest_precedence_record(tmp_path) -> None:
+    repo_root = tmp_path / "repo"
+    home = tmp_path / "home" / ".harnessdiff"
+    legacy_skill = home / "skills" / "financial-statement-analysis"
+    legacy_skill.mkdir(parents=True)
+    (legacy_skill / "SKILL.md").write_text(
+        "---\n"
+        "name: financial-statement-analysis\n"
+        "description: Legacy copy\n"
+        "---\n"
+        "# Legacy\n",
+        encoding="utf-8",
+    )
+    agents_skill = tmp_path / "home" / ".agents" / "skills" / "financial-statement-analysis"
+    agents_skill.mkdir(parents=True)
+    (agents_skill / "SKILL.md").write_text(
+        "---\n"
+        "name: financial-statement-analysis\n"
+        "description: Codex-compatible copy\n"
+        "---\n"
+        "# Agents\n",
+        encoding="utf-8",
+    )
+
+    store = SkillStore(home_dir=home, repo_root=repo_root)
+    skills = [
+        skill
+        for skill in store.list_skills()
+        if skill.name == "financial-statement-analysis"
+    ]
+
+    assert [skill.id for skill in skills] == ["financial-statement-analysis"]
+    assert "--user-financial-statement-analysis" not in store.context_manifest()
+    detail = store.read_skill("financial-statement-analysis")
+    assert "# Agents" in detail["content"]
 
 
 def test_create_subagent_definition_and_list_it(tmp_path) -> None:
@@ -159,6 +196,7 @@ def test_create_subagent_definition_and_list_it(tmp_path) -> None:
             "model": "gpt-5.4-mini",
             "reasoning_effort": "low",
             "max_output_chars": 1200,
+            "tools": ["WebSearch", "WebFetch"],
             "enabled": True,
         },
     )
@@ -167,10 +205,19 @@ def test_create_subagent_definition_and_list_it(tmp_path) -> None:
     created = response.json()["subagent"]
     assert created["id"] == "fact_checker"
     assert created["label"] == "Fact Checker"
-    assert (tmp_path / "home" / "agents" / "fact_checker.md").exists()
+    assert created["tools"] == ["standard.web.search", "standard.web.fetch"]
+    created_path = tmp_path / "home" / "agents" / "fact_checker.md"
+    assert created_path.exists()
+    assert "tools: standard.web.search, standard.web.fetch" in created_path.read_text(
+        encoding="utf-8"
+    )
 
     subagents = client.get("/api/subagents").json()["subagents"]
-    assert any(subagent["id"] == "fact_checker" for subagent in subagents)
+    assert any(
+        subagent["id"] == "fact_checker"
+        and subagent["tools"] == ["standard.web.search", "standard.web.fetch"]
+        for subagent in subagents
+    )
 
 
 def test_create_subagent_rejects_duplicate_id(tmp_path) -> None:

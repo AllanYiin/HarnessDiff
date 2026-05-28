@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.harness_modules import normalize_harness_modules
 from app.models.project import utc_now_iso
+
+SUPPORTED_RUN_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 
 
 class InputMode(str, Enum):
@@ -53,6 +56,31 @@ def default_profiles() -> list[ProfileConfig]:
     ]
 
 
+class RunAttachment(BaseModel):
+    kind: Literal["image"] = "image"
+    name: str = Field(min_length=1, max_length=255)
+    mime_type: str = Field(min_length=1, max_length=120)
+    size_bytes: int = Field(ge=0)
+    image_url: str = Field(min_length=1)
+    detail: Literal["auto", "low", "high"] = "auto"
+
+    @field_validator("mime_type")
+    @classmethod
+    def validate_mime_type(cls, value: str) -> str:
+        if value == "image/jpg":
+            return "image/jpeg"
+        if value in SUPPORTED_RUN_IMAGE_MIME_TYPES:
+            return value
+        raise ValueError("Image attachments support PNG, JPEG, WEBP, or GIF.")
+
+    @field_validator("image_url")
+    @classmethod
+    def validate_image_url(cls, value: str) -> str:
+        if value.startswith(("data:image/", "https://", "http://")):
+            return value
+        raise ValueError("Image attachments must use a data URL or fully qualified URL.")
+
+
 class RunCreate(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
 
@@ -61,6 +89,7 @@ class RunCreate(BaseModel):
     model: str = Field(default="gpt-5.4-mini", min_length=1)
     reasoning_effort: str = Field(default="medium", min_length=1)
     profiles: list[ProfileConfig] = Field(default_factory=default_profiles, min_length=1)
+    attachments: list[RunAttachment] = Field(default_factory=list)
 
 
 class RunDocument(BaseModel):
@@ -74,6 +103,7 @@ class RunDocument(BaseModel):
     model: str
     reasoning_effort: str
     profiles: list[ProfileConfig]
+    attachments: list[RunAttachment] = Field(default_factory=list)
     status: RunStatus = RunStatus.submitted
     prompt: str
     created_at: str
@@ -99,6 +129,7 @@ def new_run_document(
         model=payload.model,
         reasoning_effort=payload.reasoning_effort,
         profiles=profiles or payload.profiles,
+        attachments=payload.attachments,
         prompt=payload.prompt,
         created_at=now,
         updated_at=now,

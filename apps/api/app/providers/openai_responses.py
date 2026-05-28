@@ -5,7 +5,14 @@ import json
 from collections.abc import AsyncIterator
 from typing import Any
 
-from app.providers.base import LLMProvider, LLMRequest, ProviderConfigurationError, ProviderEvent
+from app.providers.base import (
+    LLMProvider,
+    LLMRequest,
+    ProviderConfigurationError,
+    ProviderEvent,
+    SkillSelectionRequest,
+    SkillSelectionResult,
+)
 
 DEFAULT_MAX_TOOL_ROUNDS = 16
 WEB_TOOL_NAMES = {
@@ -14,6 +21,7 @@ WEB_TOOL_NAMES = {
     "standard.web.extract_text",
     "standard.web.extract_links",
 }
+SKILL_SELECTOR_MAX_OUTPUT_TOKENS = 240
 
 
 class OpenAIResponsesProvider(LLMProvider):
@@ -190,6 +198,51 @@ class OpenAIResponsesProvider(LLMProvider):
                 )
             input_override = next_input
 
+    async def select_skills(self, request: SkillSelectionRequest) -> SkillSelectionResult:
+        if not self.api_key:
+            return SkillSelectionResult(source="llm_unavailable", error="missing_api_key")
+        if not request.skills:
+            return SkillSelectionResult(source="llm", selected_skill_ids=())
+
+        client = self._build_client()
+        try:
+            response = await client.responses.create(
+                model=request.model,
+                instructions=_skill_selector_instructions(request.max_selected),
+                input=_skill_selector_input(request),
+                max_output_tokens=SKILL_SELECTOR_MAX_OUTPUT_TOKENS,
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "skill_selection",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "selected_skill_ids": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "maxItems": request.max_selected,
+                                }
+                            },
+                            "required": ["selected_skill_ids"],
+                            "additionalProperties": False,
+                        },
+                        "strict": True,
+                    }
+                },
+            )
+        except Exception as exc:
+            return SkillSelectionResult(source="llm_error", error=str(exc))
+
+        allowed = {skill["id"] for skill in request.skills}
+        selected: list[str] = []
+        for skill_id in _selected_skill_ids_from_response(response):
+            if skill_id in allowed and skill_id not in selected:
+                selected.append(skill_id)
+            if len(selected) >= request.max_selected:
+                break
+        return SkillSelectionResult(selected_skill_ids=tuple(selected), source="llm")
+
     def _build_client(self) -> Any:
         if self.client_factory is not None:
             return self.client_factory()
@@ -224,10 +277,10 @@ def _build_stream_kwargs(
     elif request.conversation_messages:
         input_payload = [
             *request.conversation_messages,
-            {"role": "user", "content": request.prompt},
+            _user_input_message(request),
         ]
     else:
-        input_payload = request.prompt
+        input_payload = _standalone_input(request)
     create_kwargs: dict[str, Any] = {
         "model": request.model,
         "instructions": request.instructions,
@@ -235,6 +288,8 @@ def _build_stream_kwargs(
     }
     if request.reasoning_effort:
         create_kwargs["reasoning"] = {"effort": request.reasoning_effort}
+    if request.prompt_cache_key:
+        create_kwargs["prompt_cache_key"] = request.prompt_cache_key
     if tools:
         create_kwargs["tools"] = tools
     if previous_response_id:
@@ -242,10 +297,79 @@ def _build_stream_kwargs(
     return create_kwargs
 
 
+def _skill_selector_instructions(max_selected: int) -> str:
+    return (
+        "You select HarnessDiff skills for the current user request. "
+        "Use only the provided skill id, name, and description. "
+        "Select a skill when its description clearly applies to the user's task, including semantic matches. "
+        "Do not select skills for broad or merely adjacent topics. "
+        f"Return JSON only with at most {max_selected} selected_skill_ids."
+    )
+
+
+def _skill_selector_input(request: SkillSelectionRequest) -> str:
+    return json.dumps(
+        {
+            "user_prompt": request.prompt,
+            "available_skills": list(request.skills),
+        },
+        ensure_ascii=False,
+    )
+
+
+def _selected_skill_ids_from_response(response: Any) -> tuple[str, ...]:
+    text = str(getattr(response, "output_text", "") or "").strip()
+    if not text:
+        output = _response_output_items(response)
+        text_parts: list[str] = []
+        for item in output:
+            content = item.get("content")
+            if isinstance(content, list):
+                for content_item in content:
+                    if isinstance(content_item, dict):
+                        item_text = content_item.get("text")
+                        if isinstance(item_text, str):
+                            text_parts.append(item_text)
+        text = "\n".join(text_parts).strip()
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return ()
+    ids = data.get("selected_skill_ids") if isinstance(data, dict) else None
+    if not isinstance(ids, list):
+        return ()
+    return tuple(str(skill_id).strip() for skill_id in ids if str(skill_id).strip())
+
+
 def _initial_input_items(request: LLMRequest) -> list[dict[str, Any]]:
     if request.conversation_messages:
-        return [*request.conversation_messages, {"role": "user", "content": request.prompt}]
-    return [{"role": "user", "content": request.prompt}]
+        return [*request.conversation_messages, _user_input_message(request)]
+    return [_user_input_message(request)]
+
+
+def _standalone_input(request: LLMRequest) -> str | list[dict[str, Any]]:
+    if not request.image_attachments:
+        return request.prompt
+    return [_user_input_message(request)]
+
+
+def _user_input_message(request: LLMRequest) -> dict[str, Any]:
+    if not request.image_attachments:
+        return {"role": "user", "content": request.prompt}
+    return {
+        "role": "user",
+        "content": [
+            {"type": "input_text", "text": request.prompt},
+            *[
+                {
+                    "type": "input_image",
+                    "image_url": attachment.image_url,
+                    "detail": attachment.detail,
+                }
+                for attachment in request.image_attachments
+            ],
+        ],
+    }
 
 
 def _function_call_output_payload(invocation: Any) -> dict[str, Any]:

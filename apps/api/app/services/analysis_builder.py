@@ -62,8 +62,15 @@ def _build_profile_analysis(
     harness_modules = normalize_harness_modules(input_doc.get("harness_modules", {}))
     enabled_modules = [name for name, enabled in harness_modules.items() if enabled]
     harness_decisions = _harness_decisions(profile_dir / "events.jsonl")
-    context_sections = _context_sections(run, project_runs, profile_id, input_doc)
+    skill_invocations = _skill_invocations(profile_dir / "events.jsonl")
+    context_sections = _context_sections(
+        run, project_runs, profile_id, input_doc, skill_invocations
+    )
     provider_context_keys = ["instructions", "prompt"]
+    if skill_invocations:
+        provider_context_keys.append("skills")
+    if input_doc.get("attachments"):
+        provider_context_keys.append("attachments")
     if input_doc.get("tool_names"):
         provider_context_keys.append("tools")
     subagents = _subagent_analyses(profile_dir)
@@ -88,7 +95,11 @@ def _build_profile_analysis(
 
 
 def _context_sections(
-    run: RunDocument, project_runs: list[Path], profile_id: str, input_doc: dict[str, Any]
+    run: RunDocument,
+    project_runs: list[Path],
+    profile_id: str,
+    input_doc: dict[str, Any],
+    skill_invocations: list[dict[str, Any]],
 ) -> list[ContextSection]:
     instructions = str(input_doc.get("instructions", ""))
     prompt = str(input_doc.get("prompt", run.prompt))
@@ -99,6 +110,11 @@ def _context_sections(
     history_characters = _conversation_messages_characters(conversation_messages)
     enabled_module_names = ", ".join(name for name, enabled in harness_modules.items() if enabled)
     tool_text = ", ".join(str(name) for name in tool_names) if isinstance(tool_names, list) else ""
+    activated_skill_text = ", ".join(
+        str(event.get("skill_id"))
+        for event in skill_invocations
+        if event.get("skill_id")
+    )
     return [
         _section(
             "system_prompt",
@@ -115,6 +131,15 @@ def _context_sections(
             "Tool definitions were sent to the provider for this profile."
             if tool_text
             else "Tool definitions were not available for this profile.",
+        ),
+        _section(
+            "activated_skills",
+            "Activated skills",
+            "sent" if activated_skill_text else "not_configured",
+            activated_skill_text,
+            "Selected skill SKILL.md bodies were loaded into provider instructions."
+            if activated_skill_text
+            else "No skill was selected for this turn.",
         ),
         _section(
             "behavior_preferences",
@@ -366,3 +391,18 @@ def _harness_decisions(path: Path) -> list[dict[str, Any]]:
             if isinstance(decision, dict):
                 decisions.append(decision)
     return decisions
+
+
+def _skill_invocations(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    invocations: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") == "skill_invocation":
+                invocations.append(event)
+    return invocations

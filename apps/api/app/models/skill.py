@@ -40,6 +40,7 @@ class SubagentSummary(BaseModel):
     model: str = "gpt-5.4-mini"
     reasoning_effort: str = "medium"
     max_output_chars: int = 4000
+    tools: list[str] = Field(default_factory=list)
     enabled: bool = True
     path: str
 
@@ -57,6 +58,7 @@ class SubagentCreateRequest(BaseModel):
     model: str = Field(default="gpt-5.4-mini", min_length=1, max_length=120)
     reasoning_effort: str = Field(default="medium", pattern=r"^(low|medium|high|xhigh)$")
     max_output_chars: int = Field(default=4000, ge=256, le=20000)
+    tools: list[str] = Field(default_factory=list, max_length=8)
     enabled: bool = True
 
 

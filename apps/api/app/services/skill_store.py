@@ -15,6 +15,7 @@ from app.services.subagent_definitions import (
     SubagentDefinition,
     definition_to_markdown,
     load_subagent_definitions,
+    normalize_subagent_tools,
 )
 
 
@@ -330,6 +331,7 @@ class SkillStore:
             model=payload.model,
             reasoning_effort=payload.reasoning_effort,
             max_output_chars=payload.max_output_chars,
+            tools=normalize_subagent_tools(payload.tools),
             enabled=payload.enabled,
         )
         path.write_text(definition_to_markdown(definition), encoding="utf-8", newline="\n")
@@ -455,6 +457,7 @@ class SkillStore:
                 str(record.skill_md).lower(),
             )
         )
+        records = _dedupe_skill_records_by_base_id(records)
         return _assign_unique_skill_ids(records)
 
     def _record_for_skill_id(self, skill_id: str) -> SkillRecord | None:
@@ -600,6 +603,18 @@ def _assign_unique_skill_ids(records: list[SkillRecord]) -> list[SkillRecord]:
     return assigned
 
 
+def _dedupe_skill_records_by_base_id(records: list[SkillRecord]) -> list[SkillRecord]:
+    deduped: list[SkillRecord] = []
+    seen: set[str] = set()
+    for record in records:
+        base_id = _slugify(record.summary.name or Path(record.relative_dir).name) or "skill"
+        if base_id in seen:
+            continue
+        seen.add(base_id)
+        deduped.append(record)
+    return deduped
+
+
 def _fit_metadata_budget(lines: list[str], budget_chars: int) -> str:
     output: list[str] = []
     used = 0
@@ -631,6 +646,7 @@ def _summary_from_subagent_definition(
         model=definition.model,
         reasoning_effort=definition.reasoning_effort,
         max_output_chars=definition.max_output_chars,
+        tools=list(definition.tools),
         enabled=definition.enabled,
         path=str(path),
     )

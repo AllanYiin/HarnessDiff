@@ -19,6 +19,30 @@ class ToolRuntime(Protocol):
 
 
 @dataclass(frozen=True)
+class LLMImageAttachment:
+    name: str
+    mime_type: str
+    size_bytes: int
+    image_url: str
+    detail: str = "auto"
+
+
+@dataclass(frozen=True)
+class SkillSelectionRequest:
+    model: str
+    prompt: str
+    skills: tuple[dict[str, str], ...]
+    max_selected: int = 3
+
+
+@dataclass(frozen=True)
+class SkillSelectionResult:
+    selected_skill_ids: tuple[str, ...] = ()
+    source: str = "none"
+    error: str = ""
+
+
+@dataclass(frozen=True)
 class LLMRequest:
     profile_id: str
     profile_label: str
@@ -26,7 +50,9 @@ class LLMRequest:
     reasoning_effort: str
     instructions: str
     prompt: str
+    image_attachments: tuple[LLMImageAttachment, ...] = ()
     conversation_messages: tuple[dict[str, str], ...] = ()
+    prompt_cache_key: str = ""
     tools_enabled: bool = False
     tool_context: ToolRuntime | None = None
     subagent_id: str | None = None
@@ -53,6 +79,9 @@ class ProviderEvent:
 class LLMProvider:
     async def stream_text(self, request: LLMRequest) -> AsyncIterator[ProviderEvent]:
         raise NotImplementedError
+
+    async def select_skills(self, request: SkillSelectionRequest) -> SkillSelectionResult:
+        return SkillSelectionResult(source="not_supported")
 
 
 class ProviderConfigurationError(RuntimeError):

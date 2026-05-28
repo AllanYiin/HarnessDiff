@@ -23,6 +23,10 @@ async def health(request: Request) -> dict[str, Any]:
         if tool_runtime is not None and hasattr(tool_runtime, "list_tool_names")
         else []
     )
+    container_runtime = {}
+    container_executor = getattr(tool_runtime, "container_executor", None)
+    if container_executor is not None and hasattr(container_executor, "status"):
+        container_runtime = container_executor.status()
     if tool_names and SUBAGENT_TOOL_NAME not in tool_names:
         tool_names.append(SUBAGENT_TOOL_NAME)
     if tool_names and PARALLEL_TOOL_NAME not in tool_names:
@@ -38,5 +42,6 @@ async def health(request: Request) -> dict[str, Any]:
             "count": len(tool_names),
             "names": tool_names,
             "web_search_configured": bool(os.environ.get("SERPAPI_KEY", "").strip()),
+            "container_runtime": container_runtime,
         },
     }

@@ -6,7 +6,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.providers.base import LLMRequest, ProviderConfigurationError
+from app.providers.base import (
+    LLMImageAttachment,
+    LLMRequest,
+    ProviderConfigurationError,
+    SkillSelectionRequest,
+)
 from app.providers.openai_responses import (
     DEFAULT_MAX_TOOL_ROUNDS,
     OpenAIResponsesProvider,
@@ -89,6 +94,41 @@ def test_openai_stream_kwargs_replays_profile_local_conversation_messages() -> N
     ]
 
 
+def test_openai_stream_kwargs_includes_image_attachments_as_response_content() -> None:
+    request = LLMRequest(
+        profile_id="harness",
+        profile_label="Harness",
+        model="gpt-5.4-mini",
+        reasoning_effort="medium",
+        instructions="test",
+        prompt="what is in this image?",
+        image_attachments=(
+            LLMImageAttachment(
+                name="screen.png",
+                mime_type="image/png",
+                size_bytes=12,
+                image_url="data:image/png;base64,abc",
+            ),
+        ),
+    )
+
+    kwargs = _build_stream_kwargs(request)
+
+    assert kwargs["input"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "what is in this image?"},
+                {
+                    "type": "input_image",
+                    "image_url": "data:image/png;base64,abc",
+                    "detail": "auto",
+                },
+            ],
+        }
+    ]
+
+
 def test_openai_stream_kwargs_can_include_tools() -> None:
     request = LLMRequest(
         profile_id="harness",
@@ -103,6 +143,22 @@ def test_openai_stream_kwargs_can_include_tools() -> None:
     kwargs = _build_stream_kwargs(request, tools=tools)
 
     assert kwargs["tools"] == tools
+
+
+def test_openai_stream_kwargs_includes_prompt_cache_key() -> None:
+    request = LLMRequest(
+        profile_id="harness",
+        profile_label="Harness",
+        model="gpt-5.4-mini",
+        reasoning_effort="medium",
+        instructions="test",
+        prompt="hello",
+        prompt_cache_key="harnessdiff:project:proj_1:profile:harness",
+    )
+
+    kwargs = _build_stream_kwargs(request)
+
+    assert kwargs["prompt_cache_key"] == "harnessdiff:project:proj_1:profile:harness"
 
 
 def test_to_dict_falls_back_when_sdk_model_dump_fails() -> None:
@@ -372,6 +428,43 @@ def test_openai_provider_stops_when_tool_round_limit_is_exceeded() -> None:
     )
 
 
+def test_openai_provider_selects_skills_with_structured_output() -> None:
+    client = FakeOpenAIClient(
+        [
+            [
+                SimpleNamespace(
+                    type="response.completed",
+                    response=SimpleNamespace(id="unused", output=[]),
+                )
+            ]
+        ]
+    )
+    client.create_response = SimpleNamespace(
+        output_text='{"selected_skill_ids":["skill-a","missing","skill-a"]}'
+    )
+    provider = OpenAIResponsesProvider(api_key="test", client_factory=lambda: client)
+
+    result = asyncio.run(
+        provider.select_skills(
+            SkillSelectionRequest(
+                model="fake-model",
+                prompt="use the right skill",
+                skills=(
+                    {"id": "skill-a", "name": "Skill A", "description": "Do A"},
+                    {"id": "skill-b", "name": "Skill B", "description": "Do B"},
+                ),
+                max_selected=3,
+            )
+        )
+    )
+
+    assert result.source == "llm"
+    assert result.selected_skill_ids == ("skill-a",)
+    assert client.create_calls[0]["model"] == "fake-model"
+    assert client.create_calls[0]["max_output_tokens"] == 240
+    assert client.create_calls[0]["text"]["format"]["type"] == "json_schema"
+
+
 async def _collect_provider_events(
     provider: OpenAIResponsesProvider, request: LLMRequest
 ):
@@ -473,6 +566,8 @@ class FakeWebToolRuntime:
 class FakeOpenAIClient:
     def __init__(self, streams: list[list[object]]) -> None:
         self.calls = []
+        self.create_calls = []
+        self.create_response = SimpleNamespace(output_text='{"selected_skill_ids":[]}')
         self.responses = FakeResponses(self, streams)
 
 
@@ -484,6 +579,10 @@ class FakeResponses:
     def stream(self, **kwargs):
         self.client.calls.append(kwargs)
         return FakeStream(self.streams.pop(0))
+
+    async def create(self, **kwargs):
+        self.client.create_calls.append(kwargs)
+        return self.client.create_response
 
 
 class FakeStream:
