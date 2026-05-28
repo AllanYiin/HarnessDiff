@@ -1,7 +1,8 @@
-import type { AttachmentPreview } from "../types";
+import type { AttachmentPreview, VisionAttachmentInput } from "../types";
 
 const maxTextCharacters = 24_000;
 const maxCsvRows = 40;
+const supportedVisionMimeTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const supportedExtensions = new Set([
   ".txt",
   ".csv",
@@ -45,6 +46,29 @@ export function attachmentPromptBlock(attachments: AttachmentPreview[]): string 
   return ["", "---", "User-provided attachments:", ...blocks, "---"].join("\n");
 }
 
+export function attachmentVisionInputs(attachments: AttachmentPreview[]): VisionAttachmentInput[] {
+  return attachments.flatMap((attachment) => {
+    if (
+      attachment.status !== "ready" ||
+      attachment.kind !== "image" ||
+      !attachment.visionSupported ||
+      !attachment.dataUrl
+    ) {
+      return [];
+    }
+    return [
+      {
+        kind: "image",
+        name: attachment.name,
+        mime_type: normalizedImageMime(attachment) ?? attachment.type,
+        size_bytes: attachment.size,
+        image_url: attachment.dataUrl,
+        detail: "auto"
+      }
+    ];
+  });
+}
+
 async function ingestFile(file: File): Promise<AttachmentPreview> {
   const kind = detectKind(file);
   const base = {
@@ -78,11 +102,17 @@ async function ingestFile(file: File): Promise<AttachmentPreview> {
       };
     }
     if (kind === "image") {
+      const mimeType = normalizedImageMime(file);
+      const visionSupported = Boolean(mimeType && supportedVisionMimeTypes.has(mimeType));
       return {
         ...base,
-        summary:
-          "Image file accepted and previewed in the browser. The original bytes are PIL-compatible for backend Image.open(file) ingestion.",
-        url: URL.createObjectURL(file)
+        type: mimeType ?? file.type,
+        summary: visionSupported
+          ? "Image file accepted, previewed in the browser, and included as model vision input."
+          : "Image file accepted and previewed in the browser. This image format is not sent as model vision input.",
+        url: URL.createObjectURL(file),
+        dataUrl: visionSupported && mimeType ? await readDataUrl(file, mimeType) : undefined,
+        visionSupported
       };
     }
     if (kind === "document" || kind === "spreadsheet" || kind === "presentation" || kind === "pdf") {
@@ -141,6 +171,31 @@ function detectKind(file: File): AttachmentKind {
 function extensionOf(name: string) {
   const index = name.lastIndexOf(".");
   return index >= 0 ? name.slice(index) : "";
+}
+
+function normalizedImageMime(file: Pick<File, "name" | "type">) {
+  if (file.type === "image/jpg") {
+    return "image/jpeg";
+  }
+  if (supportedVisionMimeTypes.has(file.type)) {
+    return file.type;
+  }
+  const extension = extensionOf(file.name.toLowerCase());
+  if (extension === ".png") return "image/png";
+  if (extension === ".jpg" || extension === ".jpeg") return "image/jpeg";
+  if (extension === ".webp") return "image/webp";
+  if (extension === ".gif") return "image/gif";
+  return file.type.startsWith("image/") ? file.type : "";
+}
+
+async function readDataUrl(file: File, mimeType: string) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return `data:${mimeType};base64,${btoa(binary)}`;
 }
 
 async function readLimitedText(file: File) {

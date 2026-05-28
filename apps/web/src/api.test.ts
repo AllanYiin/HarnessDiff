@@ -61,6 +61,42 @@ describe("api response normalization", () => {
     ).rejects.toThrow("建立 run 失敗：HTTP 500 - ToolAnything import failed");
   });
 
+  it("sends image attachments when creating a run", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse({ id: "run_mock" }, true, 201));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createRun({
+      projectId: "proj_mock",
+      prompt: "describe",
+      inputMode: "integrated",
+      model: "fake-model",
+      reasoningEffort: "medium",
+      profiles: [{ id: "harness", label: "Harness", harness_modules: {} }],
+      attachments: [
+        {
+          kind: "image",
+          name: "screen.png",
+          mime_type: "image/png",
+          size_bytes: 12,
+          image_url: "data:image/png;base64,abc",
+          detail: "auto"
+        }
+      ]
+    });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.attachments).toEqual([
+      {
+        kind: "image",
+        name: "screen.png",
+        mime_type: "image/png",
+        size_bytes: 12,
+        image_url: "data:image/png;base64,abc",
+        detail: "auto"
+      }
+    ]);
+  });
+
   it("normalizes transcript profiles and drops malformed runs", async () => {
     vi.stubGlobal(
       "fetch",
@@ -73,6 +109,16 @@ describe("api response normalization", () => {
               prompt: "hello",
               input_mode: "independent",
               status: "completed",
+              attachments: [
+                {
+                  kind: "image",
+                  name: "screen.png",
+                  mime_type: "image/png",
+                  size_bytes: 12,
+                  image_url: "data:image/png;base64,abc",
+                  detail: "auto"
+                }
+              ],
               profiles: [
                 { id: "baseline", label: "NoHarness", harness_modules: {}, output_text: "baseline" },
                 {
@@ -94,6 +140,17 @@ describe("api response normalization", () => {
       runs: [
         {
           id: "run_1",
+          attachments: [
+            {
+              id: "attachment_0_screen.png",
+              name: "screen.png",
+              kind: "image",
+              type: "image/png",
+              size: 12,
+              status: "ready",
+              url: "data:image/png;base64,abc"
+            }
+          ],
           profiles: [
             { id: "baseline", label: "NoHarness", output_text: "baseline" },
             {

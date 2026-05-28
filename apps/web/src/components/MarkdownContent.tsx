@@ -4,6 +4,15 @@ type MarkdownContentProps = {
   source: string;
 };
 
+type RequestedSkillDetail = {
+  id: string;
+  content: string;
+};
+
+type ContentPart =
+  | { type: "markdown"; source: string }
+  | { type: "skillDetails"; details: RequestedSkillDetail[] };
+
 type Block =
   | { type: "heading"; level: 1 | 2 | 3; text: string }
   | { type: "paragraph"; text: string }
@@ -200,64 +209,129 @@ function normalizeTableRow(cells: string[], length: number) {
   return [...cells, ...Array.from({ length: length - cells.length }, () => "")];
 }
 
+export function splitRequestedSkillDetails(source: string): ContentPart[] {
+  const parts: ContentPart[] = [];
+  const skillBlockPattern = /(?:^|\n)---\nRequested skill details:\n([\s\S]*?)\n---(?=\n|$)/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = skillBlockPattern.exec(source)) !== null) {
+    const blockStart = match.index + (match[0].startsWith("\n") ? 1 : 0);
+    const before = source.slice(lastIndex, blockStart).trimEnd();
+    if (before) {
+      parts.push({ type: "markdown", source: before });
+    }
+    parts.push({ type: "skillDetails", details: parseRequestedSkillDetails(match[1]) });
+    lastIndex = match.index + match[0].length;
+  }
+
+  const after = source.slice(lastIndex).trim();
+  if (after) {
+    parts.push({ type: "markdown", source: after });
+  }
+  return parts.length ? parts : [{ type: "markdown", source }];
+}
+
+function parseRequestedSkillDetails(source: string): RequestedSkillDetail[] {
+  const details: RequestedSkillDetail[] = [];
+  const detailPattern =
+    /^### Requested skill \d+: ([^\n]+)\n```markdown\n([\s\S]*?)\n```(?=\n### Requested skill|\s*$)/gm;
+  let match: RegExpExecArray | null;
+  while ((match = detailPattern.exec(source)) !== null) {
+    details.push({ id: match[1].trim(), content: match[2] });
+  }
+  return details.length ? details : [{ id: "requested skill", content: source.trim() }];
+}
+
+function renderMarkdownBlocks(source: string, keyPrefix: string) {
+  return parseMarkdown(source).map((block, index) => {
+    const key = `${keyPrefix}-${index}`;
+    if (block.type === "heading") {
+      const Heading = `h${block.level + 2}` as "h3" | "h4" | "h5";
+      return <Heading key={key}>{renderInline(block.text, `heading-${key}`)}</Heading>;
+    }
+    if (block.type === "blockquote") {
+      return <blockquote key={key}>{renderInlineWithBreaks(block.text, `quote-${key}`)}</blockquote>;
+    }
+    if (block.type === "code") {
+      return (
+        <pre key={key}>
+          <code>{block.code}</code>
+        </pre>
+      );
+    }
+    if (block.type === "list") {
+      const List = block.ordered ? "ol" : "ul";
+      return (
+        <List key={key}>
+          {block.items.map((item, itemIndex) => (
+            <li key={itemIndex}>{renderInlineWithBreaks(item, `list-${key}-${itemIndex}`)}</li>
+          ))}
+        </List>
+      );
+    }
+    if (block.type === "table") {
+      return (
+        <div className="markdownTableScroller" key={key}>
+          <table>
+            <thead>
+              <tr>
+                {block.headers.map((header, headerIndex) => (
+                  <th key={headerIndex}>{renderInline(header, `table-${key}-header-${headerIndex}`)}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {block.rows.map((row, rowIndex) => (
+                <tr key={rowIndex}>
+                  {row.map((cell, cellIndex) => (
+                    <td key={cellIndex}>
+                      {renderInlineWithBreaks(cell, `table-${key}-${rowIndex}-${cellIndex}`)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+    return <p key={key}>{renderInlineWithBreaks(block.text, `paragraph-${key}`)}</p>;
+  });
+}
+
+function renderSkillDisclosure(details: RequestedSkillDetail[], key: string) {
+  return (
+    <details className="skillDisclosure" key={key}>
+      <summary>
+        <span className="skillDisclosureBadge">Skill</span>
+        <span className="skillDisclosureTitle">已載入技能內容</span>
+        <span className="skillDisclosureCount">{details.length}</span>
+      </summary>
+      <div className="skillDisclosureBody">
+        {details.map((detail, index) => (
+          <section className="skillDisclosureItem" key={`${detail.id}-${index}`}>
+            <header className="skillDisclosureItemHeader">{detail.id}</header>
+            <pre>
+              <code>{detail.content}</code>
+            </pre>
+          </section>
+        ))}
+      </div>
+    </details>
+  );
+}
+
 export function MarkdownContent({ source }: MarkdownContentProps) {
-  const blocks = parseMarkdown(source);
+  const parts = splitRequestedSkillDetails(source);
 
   return (
     <div className="markdownContent">
-      {blocks.map((block, index) => {
-        if (block.type === "heading") {
-          const Heading = `h${block.level + 2}` as "h3" | "h4" | "h5";
-          return <Heading key={index}>{renderInline(block.text, `heading-${index}`)}</Heading>;
-        }
-        if (block.type === "blockquote") {
-          return <blockquote key={index}>{renderInlineWithBreaks(block.text, `quote-${index}`)}</blockquote>;
-        }
-        if (block.type === "code") {
-          return (
-            <pre key={index}>
-              <code>{block.code}</code>
-            </pre>
-          );
-        }
-        if (block.type === "list") {
-          const List = block.ordered ? "ol" : "ul";
-          return (
-            <List key={index}>
-              {block.items.map((item, itemIndex) => (
-                <li key={itemIndex}>{renderInlineWithBreaks(item, `list-${index}-${itemIndex}`)}</li>
-              ))}
-            </List>
-          );
-        }
-        if (block.type === "table") {
-          return (
-            <div className="markdownTableScroller" key={index}>
-              <table>
-                <thead>
-                  <tr>
-                    {block.headers.map((header, headerIndex) => (
-                      <th key={headerIndex}>{renderInline(header, `table-${index}-header-${headerIndex}`)}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {block.rows.map((row, rowIndex) => (
-                    <tr key={rowIndex}>
-                      {row.map((cell, cellIndex) => (
-                        <td key={cellIndex}>
-                          {renderInlineWithBreaks(cell, `table-${index}-${rowIndex}-${cellIndex}`)}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          );
-        }
-        return <p key={index}>{renderInlineWithBreaks(block.text, `paragraph-${index}`)}</p>;
-      })}
+      {parts.flatMap((part, index) =>
+        part.type === "skillDetails"
+          ? [renderSkillDisclosure(part.details, `skill-${index}`)]
+          : renderMarkdownBlocks(part.source, `markdown-${index}`)
+      )}
     </div>
   );
 }

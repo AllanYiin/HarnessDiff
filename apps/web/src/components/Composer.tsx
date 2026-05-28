@@ -1,6 +1,6 @@
 import { Mic, Paperclip, Send, Square, X } from "lucide-react";
-import type { ChangeEvent, ClipboardEvent, FocusEvent, KeyboardEvent } from "react";
-import { useRef, useState } from "react";
+import type { ClipboardEvent, KeyboardEvent, PointerEvent } from "react";
+import { forwardRef, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 
 import type { SkillSummary } from "../api";
 import type { AttachmentPreview, InputMode, ProfileId, ProfileInstance } from "../types";
@@ -49,6 +49,18 @@ type SlashState = {
   end: number;
 };
 
+type PromptEditorHandle = {
+  focus: () => void;
+  setSelectionRange: (start: number, end: number) => void;
+};
+
+type SkillTokenRange = {
+  start: number;
+  tokenEnd: number;
+  end: number;
+  id: string;
+};
+
 declare global {
   interface Window {
     SpeechRecognition?: SpeechRecognitionConstructor;
@@ -78,10 +90,11 @@ export function Composer({
   const [listening, setListening] = useState(false);
   const [voiceError, setVoiceError] = useState("");
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const listeningRef = useRef(false);
   const activeTargetRef = useRef<"integrated" | ProfileId>("integrated");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const integratedTextareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const profileTextareaRefs = useRef<Record<ProfileId, HTMLTextAreaElement | null>>({});
+  const integratedEditorRef = useRef<PromptEditorHandle | null>(null);
+  const profileEditorRefs = useRef<Record<ProfileId, PromptEditorHandle | null>>({});
   const [slashState, setSlashState] = useState<SlashState | null>(null);
   const [activeSlashIndex, setActiveSlashIndex] = useState(0);
 
@@ -122,25 +135,21 @@ export function Composer({
     setActiveSlashIndex(0);
   }
 
-  function handleTextChange(
-    target: "integrated" | ProfileId,
-    event: ChangeEvent<HTMLTextAreaElement>
-  ) {
-    const value = event.target.value;
+  function handleEditorChange(target: "integrated" | ProfileId, value: string, cursor: number) {
     if (target === "integrated") {
       onIntegratedDraftChange(value);
     } else {
       onProfileDraftChange(target, value);
     }
-    updateSlashState(target, value, event.target.selectionStart);
+    updateSlashState(target, value, cursor);
   }
 
-  function handleTextFocus(target: "integrated" | ProfileId, event: FocusEvent<HTMLTextAreaElement>) {
+  function handleEditorFocus(target: "integrated" | ProfileId, value: string, cursor: number) {
     activeTargetRef.current = target;
-    updateSlashState(target, event.currentTarget.value, event.currentTarget.selectionStart);
+    updateSlashState(target, value, cursor);
   }
 
-  function handleTextKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+  function handleTextKeyDown(event: KeyboardEvent<HTMLElement>) {
     if (!slashState || !slashMatches.length) {
       return;
     }
@@ -177,16 +186,16 @@ export function Composer({
     }
     setSlashState(null);
     requestAnimationFrame(() => {
-      const textarea =
+      const editor =
         slashState.target === "integrated"
-          ? integratedTextareaRef.current
-          : profileTextareaRefs.current[slashState.target];
-      textarea?.focus();
-      textarea?.setSelectionRange(cursor, cursor);
+          ? integratedEditorRef.current
+          : profileEditorRefs.current[slashState.target];
+      editor?.focus();
+      editor?.setSelectionRange(cursor, cursor);
     });
   }
 
-  function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+  function handlePaste(event: ClipboardEvent<HTMLElement>) {
     const files = Array.from(event.clipboardData.files);
     if (!files.length) {
       return;
@@ -195,10 +204,26 @@ export function Composer({
     onAttach(files);
   }
 
-  function toggleVoiceInput() {
-    if (listening) {
-      recognitionRef.current?.stop();
+  function setVoiceListening(value: boolean) {
+    listeningRef.current = value;
+    setListening(value);
+  }
+
+  function stopVoiceInput() {
+    const recognition = recognitionRef.current;
+    if (!recognition && !listeningRef.current) {
       setListening(false);
+      return;
+    }
+    try {
+      recognition?.stop();
+    } finally {
+      setVoiceListening(false);
+    }
+  }
+
+  function startVoiceInput() {
+    if (listeningRef.current) {
       return;
     }
     const Recognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
@@ -219,13 +244,63 @@ export function Composer({
     };
     recognition.onerror = () => {
       setVoiceError("語音輸入失敗，請確認麥克風權限");
-      setListening(false);
+      setVoiceListening(false);
     };
-    recognition.onend = () => setListening(false);
+    recognition.onend = () => {
+      if (recognitionRef.current === recognition) {
+        recognitionRef.current = null;
+      }
+      setVoiceListening(false);
+    };
     recognitionRef.current = recognition;
     setVoiceError("");
-    setListening(true);
-    recognition.start();
+    setVoiceListening(true);
+    try {
+      recognition.start();
+    } catch {
+      recognitionRef.current = null;
+      setVoiceError("語音輸入失敗，請確認麥克風權限");
+      setVoiceListening(false);
+    }
+  }
+
+  function handleVoicePointerDown(event: PointerEvent<HTMLButtonElement>) {
+    if (event.button !== 0) {
+      return;
+    }
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture is best-effort; start/stop still works for the active target.
+    }
+    startVoiceInput();
+  }
+
+  function handleVoicePointerEnd(event: PointerEvent<HTMLButtonElement>) {
+    try {
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    } catch {
+      // Ignore stale pointer ids from cancelled pointer sequences.
+    }
+    stopVoiceInput();
+  }
+
+  function handleVoiceKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
+    if (event.repeat || (event.key !== " " && event.key !== "Enter")) {
+      return;
+    }
+    event.preventDefault();
+    startVoiceInput();
+  }
+
+  function handleVoiceKeyUp(event: KeyboardEvent<HTMLButtonElement>) {
+    if (event.key !== " " && event.key !== "Enter") {
+      return;
+    }
+    event.preventDefault();
+    stopVoiceInput();
   }
 
   return (
@@ -272,9 +347,14 @@ export function Composer({
           <button
             className={`iconButton ${listening ? "activeIconButton" : ""}`}
             type="button"
-            aria-label={listening ? "Stop voice input" : "Voice input"}
+            aria-label={listening ? "Release to stop voice input" : "Hold to voice input"}
             aria-pressed={listening}
-            onClick={toggleVoiceInput}
+            onPointerDown={handleVoicePointerDown}
+            onPointerUp={handleVoicePointerEnd}
+            onPointerCancel={handleVoicePointerEnd}
+            onKeyDown={handleVoiceKeyDown}
+            onKeyUp={handleVoiceKeyUp}
+            onBlur={stopVoiceInput}
           >
             <Mic aria-hidden="true" size={18} />
           </button>
@@ -323,16 +403,15 @@ export function Composer({
 
       {inputMode === "integrated" ? (
         <div className="inputRow">
-          <textarea
-            ref={integratedTextareaRef}
+          <PromptEditor
+            ref={integratedEditorRef}
             value={integratedDraft}
-            onFocus={(event) => handleTextFocus("integrated", event)}
+            skills={skills}
+            onValueChange={(value, cursor) => handleEditorChange("integrated", value, cursor)}
+            onFocus={(cursor) => handleEditorFocus("integrated", integratedDraft, cursor)}
             onPaste={handlePaste}
             onKeyDown={handleTextKeyDown}
-            onSelect={(event) =>
-              updateSlashState("integrated", event.currentTarget.value, event.currentTarget.selectionStart)
-            }
-            onChange={(event) => handleTextChange("integrated", event)}
+            onSelectionChange={(cursor) => updateSlashState("integrated", integratedDraft, cursor)}
             placeholder="輸入一個問題，同時送到左右兩邊。"
             disabled={disabled}
             aria-controls={slashState?.target === "integrated" ? "skill-command-menu" : undefined}
@@ -351,18 +430,19 @@ export function Composer({
             const paneDisabled = profileDisabled[profile.id] ?? false;
             return (
               <div className="inputRow" key={profile.id}>
-                <textarea
+                <PromptEditor
                   ref={(element) => {
-                    profileTextareaRefs.current[profile.id] = element;
+                    profileEditorRefs.current[profile.id] = element;
                   }}
                   value={profileDrafts[profile.id] ?? ""}
-                  onFocus={(event) => handleTextFocus(profile.id, event)}
+                  skills={skills}
+                  onValueChange={(value, cursor) => handleEditorChange(profile.id, value, cursor)}
+                  onFocus={(cursor) => handleEditorFocus(profile.id, profileDrafts[profile.id] ?? "", cursor)}
                   onPaste={handlePaste}
                   onKeyDown={handleTextKeyDown}
-                  onSelect={(event) =>
-                    updateSlashState(profile.id, event.currentTarget.value, event.currentTarget.selectionStart)
+                  onSelectionChange={(cursor) =>
+                    updateSlashState(profile.id, profileDrafts[profile.id] ?? "", cursor)
                   }
-                  onChange={(event) => handleTextChange(profile.id, event)}
                   placeholder={`只送到 ${profile.label}。`}
                   disabled={paneDisabled}
                   aria-controls={slashState?.target === profile.id ? "skill-command-menu" : undefined}
@@ -387,6 +467,133 @@ export function Composer({
   );
 }
 
+const PromptEditor = forwardRef<
+  PromptEditorHandle,
+  {
+    value: string;
+    skills: SkillSummary[];
+    placeholder: string;
+    disabled: boolean;
+    "aria-controls"?: string;
+    "aria-expanded"?: boolean;
+    "aria-autocomplete"?: "list";
+    onValueChange: (value: string, cursor: number) => void;
+    onFocus: (cursor: number) => void;
+    onSelectionChange: (cursor: number) => void;
+    onKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
+    onPaste: (event: ClipboardEvent<HTMLElement>) => void;
+  }
+>(function PromptEditor(
+  {
+    value,
+    skills,
+    placeholder,
+    disabled,
+    onValueChange,
+    onFocus,
+    onSelectionChange,
+    onKeyDown,
+    onPaste,
+    ...ariaProps
+  },
+  ref
+) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const pendingSelectionRef = useRef<number | null>(null);
+
+  useImperativeHandle(ref, () => ({
+    focus: () => rootRef.current?.focus(),
+    setSelectionRange: (start: number, end: number) => {
+      const root = rootRef.current;
+      if (!root) {
+        return;
+      }
+      setEditorSelection(root, start, end);
+    }
+  }));
+
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root) {
+      return;
+    }
+    const shouldRestoreSelection = pendingSelectionRef.current !== null || document.activeElement === root;
+    const cursor = pendingSelectionRef.current ?? editorSelectionOffset(root) ?? value.length;
+    renderPromptEditor(root, value, skills);
+    if (shouldRestoreSelection) {
+      setEditorSelection(root, cursor, cursor);
+    }
+    pendingSelectionRef.current = null;
+  }, [value, skills]);
+
+  function handleInput() {
+    const root = rootRef.current;
+    if (!root) {
+      return;
+    }
+    const next = editorPlainText(root);
+    const cursor = editorSelectionOffset(root) ?? next.length;
+    pendingSelectionRef.current = cursor;
+    onValueChange(next, cursor);
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (deleteAdjacentSkillToken(event, value, skills)) {
+      return;
+    }
+    onKeyDown(event);
+    if (event.key === "Enter" && !event.defaultPrevented) {
+      event.preventDefault();
+      insertPlainTextAtSelection("\n");
+    }
+  }
+
+  function handleSelectionChange() {
+    const root = rootRef.current;
+    if (!root) {
+      return;
+    }
+    onSelectionChange(editorSelectionOffset(root) ?? value.length);
+  }
+
+  return (
+    <div
+      ref={rootRef}
+      className="promptEditor"
+      role="textbox"
+      aria-multiline="true"
+      aria-disabled={disabled}
+      data-placeholder={placeholder}
+      contentEditable={disabled ? "false" : "plaintext-only"}
+      suppressContentEditableWarning
+      spellCheck
+      tabIndex={disabled ? -1 : 0}
+      onInput={handleInput}
+      onFocus={() => onFocus(editorSelectionOffset(rootRef.current) ?? value.length)}
+      onKeyDown={handleKeyDown}
+      onKeyUp={handleSelectionChange}
+      onMouseUp={handleSelectionChange}
+      onSelect={handleSelectionChange}
+      onPaste={onPaste}
+      {...ariaProps}
+    />
+  );
+
+  function insertPlainTextAtSelection(text: string) {
+    const root = rootRef.current;
+    if (!root) {
+      return;
+    }
+    const selection = editorSelectionRange(root);
+    const start = selection?.start ?? value.length;
+    const end = selection?.end ?? start;
+    const next = `${value.slice(0, start)}${text}${value.slice(end)}`;
+    const cursor = start + text.length;
+    pendingSelectionRef.current = cursor;
+    onValueChange(next, cursor);
+  }
+});
+
 function joinDraft(current: string, addition: string) {
   const trimmed = current.trimEnd();
   return trimmed ? `${trimmed} ${addition}` : addition;
@@ -404,4 +611,188 @@ function slashQueryAtCursor(value: string, cursor: number) {
     return null;
   }
   return { query, start: tokenStart, end: cursor };
+}
+
+function renderPromptEditor(root: HTMLDivElement, value: string, skills: SkillSummary[]) {
+  const ranges = skillTokenRanges(value, skills);
+  root.replaceChildren();
+  let cursor = 0;
+  ranges.forEach((range) => {
+    if (range.start > cursor) {
+      root.append(document.createTextNode(value.slice(cursor, range.start)));
+    }
+    const token = value.slice(range.start, range.tokenEnd);
+    const chip = document.createElement("span");
+    chip.className = "skillCommandToken";
+    chip.contentEditable = "false";
+    chip.dataset.skillId = range.id;
+    chip.dataset.token = token;
+    chip.textContent = token;
+    root.append(chip);
+    if (range.end > range.tokenEnd) {
+      root.append(document.createTextNode(value.slice(range.tokenEnd, range.end)));
+    }
+    cursor = range.end;
+  });
+  if (cursor < value.length) {
+    root.append(document.createTextNode(value.slice(cursor)));
+  }
+}
+
+function skillTokenRanges(value: string, skills: SkillSummary[]): SkillTokenRange[] {
+  if (!skills.length || !value.includes("/")) {
+    return [];
+  }
+  const skillIds = new Set(skills.map((skill) => skill.id));
+  const ranges: SkillTokenRange[] = [];
+  const pattern = /(^|[\s])\/([A-Za-z0-9_.-]+)(?=$|[\s])/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(value)) !== null) {
+    const id = match[2];
+    if (!skillIds.has(id)) {
+      continue;
+    }
+    const start = match.index + match[1].length;
+    const tokenEnd = start + id.length + 1;
+    const end = value[tokenEnd] === " " ? tokenEnd + 1 : tokenEnd;
+    ranges.push({ start, tokenEnd, end, id });
+  }
+  return ranges;
+}
+
+function editorPlainText(root: HTMLElement) {
+  return Array.from(root.childNodes).map((node) => nodePlainText(node)).join("");
+}
+
+function nodePlainText(node: Node): string {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return node.textContent ?? "";
+  }
+  if (node instanceof HTMLBRElement) {
+    return "\n";
+  }
+  if (node instanceof HTMLElement && node.classList.contains("skillCommandToken")) {
+    return node.dataset.token ?? node.textContent ?? "";
+  }
+  if (node instanceof HTMLDivElement || node instanceof HTMLParagraphElement) {
+    return Array.from(node.childNodes).map((child) => nodePlainText(child)).join("") + "\n";
+  }
+  return Array.from(node.childNodes).map((child) => nodePlainText(child)).join("");
+}
+
+function editorSelectionRange(root: HTMLElement) {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) {
+    return null;
+  }
+  const range = selection.getRangeAt(0);
+  if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) {
+    return null;
+  }
+  return {
+    start: editorOffsetForPoint(root, range.startContainer, range.startOffset),
+    end: editorOffsetForPoint(root, range.endContainer, range.endOffset),
+  };
+}
+
+function editorSelectionOffset(root: HTMLElement | null) {
+  if (!root) {
+    return null;
+  }
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) {
+    return null;
+  }
+  const range = selection.getRangeAt(0);
+  if (!root.contains(range.startContainer)) {
+    return null;
+  }
+  return editorOffsetForPoint(root, range.startContainer, range.startOffset);
+}
+
+function editorOffsetForPoint(root: HTMLElement, container: Node, offset: number) {
+  const range = document.createRange();
+  range.selectNodeContents(root);
+  range.setEnd(container, offset);
+  return range.toString().length;
+}
+
+function setEditorSelection(root: HTMLElement, start: number, end: number) {
+  const selection = window.getSelection();
+  if (!selection) {
+    return;
+  }
+  const range = document.createRange();
+  const startPoint = editorPointAtOffset(root, start);
+  const endPoint = editorPointAtOffset(root, end);
+  range.setStart(startPoint.node, startPoint.offset);
+  range.setEnd(endPoint.node, endPoint.offset);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function editorPointAtOffset(root: HTMLElement, targetOffset: number) {
+  let current = 0;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+  let node = walker.nextNode();
+  while (node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node.textContent ?? "";
+      const next = current + text.length;
+      if (targetOffset <= next) {
+        return { node, offset: Math.max(0, targetOffset - current) };
+      }
+      current = next;
+    } else if (node instanceof HTMLBRElement) {
+      const next = current + 1;
+      if (targetOffset <= next) {
+        return { node: root, offset: childIndex(root, node) + 1 };
+      }
+      current = next;
+    } else if (node instanceof HTMLElement && node.classList.contains("skillCommandToken")) {
+      const token = node.dataset.token ?? node.textContent ?? "";
+      const next = current + token.length;
+      if (targetOffset <= next) {
+        const offset = targetOffset - current < token.length / 2 ? childIndex(root, node) : childIndex(root, node) + 1;
+        return { node: root, offset };
+      }
+      current = next;
+    }
+    node = walker.nextNode();
+  }
+  return { node: root, offset: root.childNodes.length };
+}
+
+function childIndex(parent: HTMLElement, child: Node) {
+  return Array.prototype.indexOf.call(parent.childNodes, child);
+}
+
+function deleteAdjacentSkillToken(event: KeyboardEvent<HTMLElement>, value: string, skills: SkillSummary[]) {
+  if (event.key !== "Backspace" && event.key !== "Delete") {
+    return false;
+  }
+  const root = event.currentTarget;
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0 || !selection.getRangeAt(0).collapsed) {
+    return false;
+  }
+  const cursor = editorSelectionOffset(root);
+  if (cursor === null) {
+    return false;
+  }
+  const ranges = skillTokenRanges(value, skills);
+  const target =
+    event.key === "Backspace"
+      ? ranges.find((range) => cursor > range.start && cursor <= range.end)
+      : ranges.find((range) => cursor >= range.start && cursor < range.end);
+  if (!target) {
+    return false;
+  }
+  event.preventDefault();
+  const next = `${value.slice(0, target.start)}${value.slice(target.end)}`;
+  root.replaceChildren();
+  root.append(document.createTextNode(next));
+  root.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "deleteContentBackward" }));
+  requestAnimationFrame(() => setEditorSelection(root, target.start, target.start));
+  return true;
 }

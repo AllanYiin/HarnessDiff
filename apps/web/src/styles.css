@@ -110,6 +110,7 @@ body {
 input,
 select,
 textarea,
+.promptEditor,
 button {
   font: inherit;
 }
@@ -135,7 +136,8 @@ button {
 }
 
 button:disabled,
-textarea:disabled {
+textarea:disabled,
+.promptEditor[aria-disabled="true"] {
   cursor: not-allowed;
   opacity: 0.58;
 }
@@ -689,6 +691,10 @@ textarea:disabled {
   max-width: min(780px, 96%);
 }
 
+.message:has(.messageAttachmentGrid) {
+  max-width: min(760px, 96%);
+}
+
 .messageHeader {
   display: flex;
   align-items: center;
@@ -723,6 +729,59 @@ textarea:disabled {
   color: var(--color-text);
 }
 
+.messageAttachmentGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 240px));
+  gap: var(--space-2);
+  margin: 6px 0 10px;
+}
+
+.messageAttachment {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.messageAttachment img,
+.messageAttachmentFile {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  display: block;
+  object-fit: contain;
+  background: #f8fafc;
+}
+
+.messageAttachmentFile {
+  display: grid;
+  place-items: center;
+  color: var(--color-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.messageAttachment figcaption {
+  display: grid;
+  gap: 2px;
+  padding: 7px 8px;
+}
+
+.messageAttachment figcaption span {
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.messageAttachment figcaption small {
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
 .toolCallStack {
   display: grid;
   gap: 8px;
@@ -745,7 +804,7 @@ textarea:disabled {
 .toolCallDisclosure summary {
   min-height: 36px;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto auto;
   align-items: center;
   gap: 8px;
   padding: 7px 10px;
@@ -776,7 +835,8 @@ textarea:disabled {
 }
 
 .toolCallBadge,
-.toolCallStatus {
+.toolCallStatus,
+.toolCallTokens {
   border-radius: 999px;
   padding: 2px 7px;
   font-size: 11px;
@@ -794,6 +854,12 @@ textarea:disabled {
   border: 1px solid #99f6e4;
   background: #ccfbf1;
   color: #115e59;
+}
+
+.toolCallTokens {
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1e40af;
 }
 
 .toolCallStatus.failed {
@@ -833,6 +899,84 @@ textarea:disabled {
   line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.skillInvocationStack {
+  display: grid;
+  gap: 8px;
+  margin: 4px 0 10px;
+}
+
+.skillInvocationDisclosure {
+  overflow: clip;
+  border: 1px solid #99f6e4;
+  border-left: 4px solid #0f766e;
+  border-radius: 7px;
+  background: #f0fdfa;
+}
+
+.skillInvocationDisclosure summary {
+  min-height: 34px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  color: #115e59;
+  list-style-position: outside;
+}
+
+.skillInvocationDisclosure summary:focus-visible {
+  outline: 2px solid var(--color-action);
+  outline-offset: -2px;
+}
+
+.skillInvocationBadge,
+.skillInvocationStatus,
+.skillInvocationTokens {
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.skillInvocationBadge {
+  border: 1px solid #5eead4;
+  background: #ccfbf1;
+  color: #115e59;
+  text-transform: uppercase;
+}
+
+.skillInvocationName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.skillInvocationStatus {
+  border: 1px solid #99f6e4;
+  background: #ffffff;
+  color: #115e59;
+}
+
+.skillInvocationTokens {
+  border: 1px solid #5eead4;
+  background: #ffffff;
+  color: #0f766e;
+}
+
+.skillInvocationDisclosure p {
+  margin: 0;
+  border-top: 1px solid #ccfbf1;
+  padding: 0 10px 10px 10px;
+  color: #0f766e;
+  font-size: 12px;
 }
 
 .markdownContent {
@@ -905,6 +1049,88 @@ textarea:disabled {
   color: inherit;
   padding: 0;
   white-space: pre;
+}
+
+.skillDisclosure {
+  margin: 8px 0 0;
+  overflow: clip;
+  border: 1px solid #0f766e;
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.skillDisclosure summary {
+  min-height: 38px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  background: #0f766e;
+  color: #ffffff;
+  font-weight: 700;
+  list-style-position: inside;
+}
+
+.skillDisclosure summary::marker,
+.skillDisclosure summary::-webkit-details-marker {
+  color: #ffffff;
+}
+
+.skillDisclosure summary:focus-visible {
+  outline: 2px solid #ffffff;
+  outline-offset: -4px;
+}
+
+.skillDisclosureBadge,
+.skillDisclosureCount {
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.18);
+  color: #ffffff;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.skillDisclosureBadge {
+  padding: 5px 8px;
+  text-transform: uppercase;
+}
+
+.skillDisclosureCount {
+  min-width: 24px;
+  padding: 5px 7px;
+  text-align: center;
+}
+
+.skillDisclosureTitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skillDisclosureBody {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  background: #f8fafc;
+}
+
+.skillDisclosureItem {
+  min-width: 0;
+}
+
+.skillDisclosureItemHeader {
+  margin-bottom: 6px;
+  color: var(--color-harness);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.skillDisclosureItem pre {
+  margin: 0;
 }
 
 .markdownTableScroller {
@@ -1127,11 +1353,13 @@ textarea:disabled {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 
-textarea {
+textarea,
+.promptEditor {
   width: 100%;
   min-width: 0;
   height: 50px;
   resize: none;
+  overflow-y: auto;
   border: 1px solid var(--color-border);
   border-radius: 8px;
   padding: 10px 12px;
@@ -1140,7 +1368,40 @@ textarea {
   line-height: 1.35;
 }
 
+.promptEditor {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.promptEditor:empty::before {
+  content: attr(data-placeholder);
+  color: var(--color-muted);
+  pointer-events: none;
+}
+
+.skillCommandToken {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  margin: 0 2px;
+  border: 1px solid #99f6e4;
+  border-radius: 6px;
+  background: #ccfbf1;
+  color: #0f766e;
+  padding: 0 6px;
+  font-weight: 700;
+  line-height: 1.5;
+  user-select: all;
+  vertical-align: baseline;
+}
+
+.skillCommandToken::selection {
+  background: #5eead4;
+  color: #042f2e;
+}
+
 textarea:focus,
+.promptEditor:focus,
 input:focus,
 button:focus-visible,
 select:focus {

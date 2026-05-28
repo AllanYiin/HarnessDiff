@@ -27,6 +27,18 @@ export type Message = {
   text: string;
   status?: "streaming" | "done";
   toolCalls?: ToolCallTrace[];
+  skillInvocations?: SkillInvocationTrace[];
+  attachments?: MessageAttachment[];
+};
+
+export type MessageAttachment = {
+  id: string;
+  name: string;
+  kind: AttachmentPreview["kind"];
+  type: string;
+  size: number;
+  status: AttachmentPreview["status"];
+  url?: string;
 };
 
 export type ToolCallTrace = {
@@ -38,8 +50,27 @@ export type ToolCallTrace = {
   result_summary?: string;
   error?: unknown;
   elapsed_ms?: number;
+  token_usage?: TokenUsageTrace;
   subagent_id?: string | null;
   subagent_label?: string | null;
+};
+
+export type TokenUsageTrace = {
+  source?: string;
+  basis?: string;
+  input_tokens?: number;
+  cached_tokens?: number;
+  output_tokens?: number;
+  reasoning_tokens?: number;
+  total_tokens?: number;
+};
+
+export type SkillInvocationTrace = {
+  id: string;
+  skill_id: string;
+  status?: string;
+  sequence?: number;
+  token_usage?: TokenUsageTrace;
 };
 
 export type AttachmentPreview = {
@@ -53,6 +84,17 @@ export type AttachmentPreview = {
   content?: string;
   error?: string;
   url?: string;
+  dataUrl?: string;
+  visionSupported?: boolean;
+};
+
+export type VisionAttachmentInput = {
+  kind: "image";
+  name: string;
+  mime_type: string;
+  size_bytes: number;
+  image_url: string;
+  detail?: "auto" | "low" | "high";
 };
 
 export type ProfileState = {

@@ -90,7 +90,7 @@ test("renders analysis metrics from streamed API events", async ({ page }) => {
   });
 
   await page.goto("/");
-  await page.locator("textarea").first().fill("stream with analysis");
+  await page.locator(".promptEditor").first().fill("stream with analysis");
   await page.getByRole("button", { name: "送出" }).click();
 
   await expect(page.getByText("本回合分析已產生")).toBeVisible();
@@ -106,6 +106,7 @@ test("renders analysis metrics from streamed API events", async ({ page }) => {
 
 test("attaches readable files and sends their context with the prompt", async ({ page }) => {
   let submittedPrompt = "";
+  let submittedAttachments: unknown[] = [];
 
   await page.route("**/api/projects", async (route) => {
     await route.fulfill({
@@ -115,7 +116,9 @@ test("attaches readable files and sends their context with the prompt", async ({
     });
   });
   await page.route("**/api/projects/proj_attach/runs", async (route) => {
-    submittedPrompt = (route.request().postDataJSON() as { prompt: string }).prompt;
+    const payload = route.request().postDataJSON() as { prompt: string; attachments?: unknown[] };
+    submittedPrompt = payload.prompt;
+    submittedAttachments = payload.attachments ?? [];
     await route.fulfill({
       status: 201,
       contentType: "application/json",
@@ -140,14 +143,29 @@ test("attaches readable files and sends their context with the prompt", async ({
     mimeType: "text/csv",
     buffer: Buffer.from("name,score\nAda,10")
   });
+  await page.getByLabel("Attach file").setInputFiles({
+    name: "diagram.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/l1ExWQAAAABJRU5ErkJggg==",
+      "base64"
+    )
+  });
   await expect(page.getByRole("button", { name: /scores.csv/ })).toBeVisible();
-  await page.locator("textarea").first().fill("請看附件");
+  await expect(page.getByRole("button", { name: /diagram.png/ })).toBeVisible();
+  await page.locator(".promptEditor").first().fill("請看附件");
   await page.getByRole("button", { name: "送出" }).click();
 
   await expect.poll(() => submittedPrompt).toContain("User-provided attachments");
   expect(submittedPrompt).toContain("Attachment 1: scores.csv");
+  expect(submittedPrompt).toContain("Attachment 2: diagram.png");
   expect(submittedPrompt).toContain("pandas.DataFrame preview");
   expect(submittedPrompt).toContain("Ada | 10");
+  expect(submittedAttachments).toHaveLength(1);
+  const userMessage = page.locator(".message.user").first();
+  await expect(userMessage).toContainText("請看附件");
+  await expect(userMessage).not.toContainText("User-provided attachments");
+  await expect(userMessage.getByRole("img", { name: "diagram.png" })).toBeVisible();
 });
 
 test("uses browser speech recognition output as voice input", async ({ page }) => {
@@ -178,8 +196,10 @@ test("uses browser speech recognition output as voice input", async ({ page }) =
   });
 
   await page.goto("/");
-  await page.getByRole("button", { name: "Voice input" }).click();
-  await expect(page.locator("textarea").first()).toHaveValue("語音輸入文字");
+  await page.getByRole("button", { name: "Hold to voice input" }).hover();
+  await page.mouse.down();
+  await expect(page.locator(".promptEditor").first()).toHaveText("語音輸入文字");
+  await page.mouse.up();
 });
 
 test("lists skills and imports a skill file", async ({ page }) => {
@@ -317,12 +337,19 @@ test("uses skill slash commands in the composer", async ({ page }) => {
   });
 
   await page.goto("/");
-  const textarea = page.locator("textarea").first();
-  await textarea.fill("/");
+  const editor = page.locator(".promptEditor").first();
+  await editor.fill("/");
   await expect(page.getByRole("option", { name: /demo-skill/ })).toBeVisible();
   await page.getByRole("option", { name: /demo-skill/ }).click();
-  await expect(textarea).toHaveValue("/demo-skill ");
-  await textarea.fill("/demo-skill 請照這個技能回答");
+  const token = editor.locator(".skillCommandToken");
+  await expect(token).toHaveText("/demo-skill");
+  await expect(token).toHaveCSS("color", "rgb(15, 118, 110)");
+  await expect(token).toHaveAttribute("contenteditable", "false");
+  await page.keyboard.press("Backspace");
+  await expect(token).toHaveCount(0);
+  await expect(editor).toHaveText("");
+  await editor.fill("/demo-skill 請照這個技能回答");
+  await expect(editor.locator(".skillCommandToken")).toHaveText("/demo-skill");
   await page.getByRole("button", { name: "送出" }).click();
 
   await expect.poll(() => submittedPrompt).toContain("Requested skill details");
@@ -388,9 +415,9 @@ test("allows independent panes to submit while the other pane is still running",
 
   await page.goto("/");
   await page.getByRole("button", { name: "個別獨立輸入" }).click();
-  const textareas = page.locator(".splitInputRow textarea");
-  await textareas.nth(0).fill("baseline prompt");
-  await textareas.nth(1).fill("harness prompt");
+  const editors = page.locator(".splitInputRow .promptEditor");
+  await editors.nth(0).fill("baseline prompt");
+  await editors.nth(1).fill("harness prompt");
 
   await page.getByRole("button", { name: "送 NoHarness" }).click();
   await expect(page.getByRole("button", { name: "送 NoHarness" })).toBeDisabled();
@@ -482,7 +509,7 @@ test("renders each tool call as a collapsible control with subagent styling", as
   });
 
   await page.goto("/");
-  await page.locator("textarea").first().fill("show tools");
+  await page.locator(".promptEditor").first().fill("show tools");
   await page.getByRole("button", { name: "送出" }).click();
 
   const harnessPane = page.locator(".controlledProfile");
@@ -542,7 +569,7 @@ test("renders assistant Markdown and copies raw Markdown source", async ({ page,
   });
 
   await page.goto("/");
-  await page.locator("textarea").first().fill("markdown please");
+  await page.locator(".promptEditor").first().fill("markdown please");
   await page.getByRole("button", { name: "送出" }).click();
 
   const assistantMessage = page.locator(".message.assistant").first();
@@ -599,7 +626,7 @@ test("renders GitHub-style Markdown tables", async ({ page }) => {
   });
 
   await page.goto("/");
-  await page.locator("textarea").first().fill("table please");
+  await page.locator(".promptEditor").first().fill("table please");
   await page.getByRole("button", { name: "送出" }).click();
 
   const table = page.locator(".message.assistant table").first();
@@ -644,7 +671,7 @@ test("keeps long conversations inside the viewport and scrolls message lists", a
   });
 
   await page.goto("/");
-  await page.locator("textarea").first().fill("long response");
+  await page.locator(".promptEditor").first().fill("long response");
   await page.getByRole("button", { name: "送出" }).click();
   await expect(page.getByText("第 120 行內容").first()).toBeVisible();
 
@@ -719,7 +746,7 @@ test("creates a named conversation and shows it in history", async ({ page }) =>
   });
 
   await page.goto("/");
-  await page.locator("textarea").first().fill("這是一段會自動命名的歷史對話");
+  await page.locator(".promptEditor").first().fill("這是一段會自動命名的歷史對話");
   await page.getByRole("button", { name: "送出" }).dblclick();
 
   await expect(page.getByText("baseline")).toBeVisible();
@@ -756,7 +783,7 @@ test("pauses a running streamed response", async ({ page }) => {
   });
 
   await page.goto("/");
-  await page.locator("textarea").first().fill("pause this response");
+  await page.locator(".promptEditor").first().fill("pause this response");
   await page.getByRole("button", { name: "送出" }).click();
   await expect(page.getByRole("button", { name: "暫停執行" })).toBeVisible();
   await page.getByRole("button", { name: "暫停執行" }).click();

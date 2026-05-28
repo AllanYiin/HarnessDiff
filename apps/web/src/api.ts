@@ -1,4 +1,12 @@
-import type { HarnessModules, InputMode, ProfileId, ProfileInstance, ToolCallTrace } from "./types";
+import type {
+  HarnessModules,
+  InputMode,
+  MessageAttachment,
+  ProfileId,
+  ProfileInstance,
+  ToolCallTrace,
+  VisionAttachmentInput
+} from "./types";
 
 type Project = {
   id: string;
@@ -18,6 +26,7 @@ export type TranscriptRun = {
   prompt: string;
   input_mode: InputMode;
   status: string;
+  attachments: MessageAttachment[];
   profiles: Array<ProfileInstance & { output_text: string }>;
 };
 
@@ -36,12 +45,17 @@ export type RunStreamEvent = {
     | "completed"
     | "error"
     | "tool_call"
+    | "skill_invocation"
     | "analysis_ready"
     | "run_completed"
     | "run_failed";
   text?: string | null;
   message?: string;
   tool_call?: Omit<ToolCallTrace, "id">;
+  skill_id?: string;
+  status?: string;
+  sequence?: number;
+  token_usage?: ToolCallTrace["token_usage"];
   usage?: unknown;
   analysis?: AnalysisDocument;
 };
@@ -120,6 +134,7 @@ export type SubagentSummary = {
   model: string;
   reasoning_effort: string;
   max_output_chars: number;
+  tools?: string[];
   enabled: boolean;
   path: string;
 };
@@ -137,6 +152,7 @@ export type SubagentCreatePayload = {
   model: string;
   reasoning_effort: string;
   max_output_chars: number;
+  tools?: string[];
   enabled: boolean;
 };
 
@@ -193,8 +209,36 @@ function normalizeTranscriptRun(value: unknown): TranscriptRun | null {
     prompt: value.prompt,
     input_mode: value.input_mode === "independent" ? "independent" : "integrated",
     status: asString(value.status, "completed"),
+    attachments: normalizeTranscriptAttachments(value.attachments),
     profiles
   };
+}
+
+function normalizeTranscriptAttachments(value: unknown): MessageAttachment[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((attachment, index) => {
+    if (!isRecord(attachment) || attachment.kind !== "image") {
+      return [];
+    }
+    const name = asString(attachment.name, `image-${index + 1}`);
+    const imageUrl = asString(attachment.image_url);
+    if (!imageUrl) {
+      return [];
+    }
+    return [
+      {
+        id: `attachment_${index}_${name}`,
+        name,
+        kind: "image",
+        type: asString(attachment.mime_type, "image/*"),
+        size: typeof attachment.size_bytes === "number" ? attachment.size_bytes : 0,
+        status: "ready",
+        url: imageUrl
+      }
+    ];
+  });
 }
 
 export async function createProject(name: string): Promise<Project> {
@@ -265,6 +309,7 @@ export async function createRun(params: {
   model: string;
   reasoningEffort: string;
   profiles: ProfileInstance[];
+  attachments?: VisionAttachmentInput[];
 }): Promise<Run> {
   const response = await fetch(`/api/projects/${params.projectId}/runs`, {
     method: "POST",
@@ -274,7 +319,8 @@ export async function createRun(params: {
       input_mode: params.inputMode,
       model: params.model,
       reasoning_effort: params.reasoningEffort,
-      profiles: params.profiles
+      profiles: params.profiles,
+      attachments: params.attachments ?? []
     })
   });
   if (!response.ok) {

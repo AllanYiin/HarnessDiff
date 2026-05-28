@@ -26,18 +26,26 @@ import {
   type SubagentSummary,
   type SkillSummary
 } from "./api";
-import { attachmentPromptBlock, ingestFiles } from "./domain/fileIngestion";
+import { attachmentPromptBlock, attachmentVisionInputs, ingestFiles } from "./domain/fileIngestion";
 import { nextInputModeAfterCompletedTurn } from "./domain/inputMode";
 import { parseSkillCommandIds, skillDetailsPromptBlock } from "./domain/skillCommands";
+import {
+  readPreferredModel,
+  readPreferredReasoningEffort,
+  writePreferredModel,
+  writePreferredReasoningEffort
+} from "./domain/userPreferences";
 import type {
   AttachmentPreview,
   HarnessModuleId,
   HarnessModules,
   InputMode,
   Message,
+  MessageAttachment,
   ProfileId,
   ProfileInstance,
-  ProfileState
+  ProfileState,
+  VisionAttachmentInput
 } from "./types";
 
 const newConversationName = "新對話";
@@ -60,12 +68,18 @@ const defaultProfiles: ProfileInstance[] = [
   { id: "harness", label: "Harness", harness_modules: defaultHarnessModules }
 ];
 
-function createMessage(role: Message["role"], text: string, status: Message["status"] = "done") {
+function createMessage(
+  role: Message["role"],
+  text: string,
+  status: Message["status"] = "done",
+  attachments: MessageAttachment[] = []
+) {
   return {
     id: `${role}_${crypto.randomUUID()}`,
     role,
     text,
-    status
+    status,
+    attachments
   };
 }
 
@@ -95,8 +109,8 @@ function errorMessage(error: unknown) {
 }
 
 export function App() {
-  const [model, setModel] = useState("gpt-5.4-mini");
-  const [reasoningEffort, setReasoningEffort] = useState("medium");
+  const [model, setModel] = useState(readPreferredModel);
+  const [reasoningEffort, setReasoningEffort] = useState(readPreferredReasoningEffort);
   const [turnCount, setTurnCount] = useState(0);
   const [inputMode, setInputMode] = useState<InputMode>("integrated");
   const [projectId, setProjectId] = useState<string | null>(null);
@@ -351,8 +365,9 @@ export function App() {
           state.messages.push({
             id: `${run.id}_${profile.id}_user`,
             role: "user",
-            text: run.prompt,
-            status: "done"
+            text: displayPromptFromProviderPrompt(run.prompt),
+            status: "done",
+            attachments: run.attachments
           });
           state.messages.push({
             id: `${run.id}_${profile.id}_assistant`,
@@ -377,13 +392,18 @@ export function App() {
     }
   }
 
-  function prepareStreamingProfile(profileId: ProfileId, prompt: string, assistantId: string) {
+  function prepareStreamingProfile(
+    profileId: ProfileId,
+    displayPrompt: string,
+    assistantId: string,
+    messageAttachments: MessageAttachment[]
+  ) {
     updateProfileState(profileId, (current) => ({
       ...current,
       streaming: true,
       messages: [
         ...current.messages,
-        createMessage("user", prompt),
+        createMessage("user", displayPrompt, "done", messageAttachments),
         { id: assistantId, role: "assistant", text: "", status: "streaming" }
       ]
     }));
@@ -417,6 +437,28 @@ export function App() {
                     id: `tool_${crypto.randomUUID()}`,
                     ...toolCall,
                     tool_name: toolCall.tool_name || toolCall.openai_name || "unknown_tool"
+                  }
+                ]
+              }
+            : message
+        )
+      }));
+    }
+    if (event.type === "skill_invocation" && event.skill_id) {
+      updateProfileState(event.profile_id, (current) => ({
+        ...current,
+        messages: current.messages.map((message) =>
+          message.id === assistantIds[event.profile_id as ProfileId]
+            ? {
+                ...message,
+                skillInvocations: [
+                  ...(message.skillInvocations ?? []),
+                  {
+                    id: `skill_${crypto.randomUUID()}`,
+                    skill_id: event.skill_id ?? "",
+                    status: event.status,
+                    sequence: event.sequence,
+                    token_usage: event.token_usage
                   }
                 ]
               }
@@ -501,7 +543,14 @@ export function App() {
     return projectCreationRef.current;
   }
 
-  async function submitWithApi(prompt: string, targetProfileIds: ProfileId[], mode: InputMode) {
+  async function submitWithApi(
+    prompt: string,
+    displayPrompt: string,
+    targetProfileIds: ProfileId[],
+    mode: InputMode,
+    visionAttachments: VisionAttachmentInput[],
+    messageAttachments: MessageAttachment[]
+  ) {
     setAnalysis(null);
     const controller = new AbortController();
     const activeProfiles = profiles.filter((profile) => targetProfileIds.includes(profile.id));
@@ -513,7 +562,7 @@ export function App() {
       activeProfiles.map((profile) => [profile.id, `assistant_${crypto.randomUUID()}`])
     );
     activeProfiles.forEach((profile) =>
-      prepareStreamingProfile(profile.id, prompt, assistantIds[profile.id])
+      prepareStreamingProfile(profile.id, displayPrompt, assistantIds[profile.id], messageAttachments)
     );
     try {
       const activeProjectId = await ensureProject(prompt);
@@ -523,7 +572,8 @@ export function App() {
         inputMode: mode,
         model,
         reasoningEffort,
-        profiles: activeProfiles
+        profiles: activeProfiles,
+        attachments: visionAttachments
       });
       await streamRun(
         run.id,
@@ -563,9 +613,18 @@ export function App() {
     }
     try {
       const prompt = await buildPromptWithContext(draft);
+      const visionAttachments = attachmentVisionInputs(attachments);
+      const messageAttachments = messageAttachmentPreviews(attachments);
       setIntegratedDraft("");
       clearAttachments();
-      void submitWithApi(prompt, profiles.map((profile) => profile.id), "integrated");
+      void submitWithApi(
+        prompt,
+        draft,
+        profiles.map((profile) => profile.id),
+        "integrated",
+        visionAttachments,
+        messageAttachments
+      );
     } catch (error) {
       setSkillError(errorMessage(error));
       setSkillsOpen(true);
@@ -587,9 +646,11 @@ export function App() {
     }
     try {
       const prompt = await buildPromptWithContext(draft);
+      const visionAttachments = attachmentVisionInputs(attachments);
+      const messageAttachments = messageAttachmentPreviews(attachments);
       updateProfileState(profileId, (current) => ({ ...current, draft: "" }));
       clearAttachments();
-      void submitWithApi(prompt, [profileId], "independent");
+      void submitWithApi(prompt, draft, [profileId], "independent", visionAttachments, messageAttachments);
     } catch (error) {
       setSkillError(errorMessage(error));
       setSkillsOpen(true);
@@ -606,6 +667,25 @@ export function App() {
 
   function buildPromptWithAttachments(text: string) {
     return `${text}${attachmentPromptBlock(attachments)}`.trim();
+  }
+
+  function messageAttachmentPreviews(source: AttachmentPreview[]): MessageAttachment[] {
+    return source.flatMap((attachment) => {
+      if (attachment.status !== "ready") {
+        return [];
+      }
+      return [
+        {
+          id: attachment.id,
+          name: attachment.name,
+          kind: attachment.kind,
+          type: attachment.type,
+          size: attachment.size,
+          status: attachment.status,
+          url: attachment.kind === "image" ? attachment.dataUrl ?? attachment.url : attachment.url
+        }
+      ];
+    });
   }
 
   async function buildPromptWithContext(text: string) {
@@ -627,6 +707,15 @@ export function App() {
       });
       return [];
     });
+  }
+
+  function displayPromptFromProviderPrompt(prompt: string) {
+    const marker = "\n---\nUser-provided attachments:";
+    const index = prompt.indexOf(marker);
+    if (index >= 0) {
+      return prompt.slice(0, index).trim();
+    }
+    return prompt;
   }
 
   function removeAttachment(id: string) {
@@ -653,6 +742,16 @@ export function App() {
           : profile
       )
     );
+  }
+
+  function updateModel(value: string) {
+    setModel(value);
+    writePreferredModel(value);
+  }
+
+  function updateReasoningEffort(value: string) {
+    setReasoningEffort(value);
+    writePreferredReasoningEffort(value);
   }
 
   function pauseExecution() {
@@ -687,8 +786,8 @@ export function App() {
         harnessModules={configurableHarnessModules}
         historyOpen={historyOpen}
         skillsOpen={skillsOpen}
-        onModelChange={setModel}
-        onReasoningEffortChange={setReasoningEffort}
+        onModelChange={updateModel}
+        onReasoningEffortChange={updateReasoningEffort}
         onHarnessModuleChange={updateHarnessModule}
         onNewConversation={startNewConversation}
         onToggleHistory={() => {
