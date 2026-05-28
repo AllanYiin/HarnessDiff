@@ -104,8 +104,7 @@ Acceptance:
 
 ## Future Work
 
-- send uploaded files/images to provider
-- implement voice input
+- send uploaded non-image files to provider
 - replay selected stored history into provider context
 - add Workflow / Agent / MultiAgents surfaces
 - add optional semantic analyzer provider

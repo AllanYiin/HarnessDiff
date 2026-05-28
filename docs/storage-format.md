@@ -115,7 +115,7 @@ Each project stores its default Harness module profile at `config/harness.defaul
 }
 ```
 
-Run-level `harness_modules` are the effective booleans after applying API/UI overrides to the project config. They are stored in `run.json` and repeated in profile `input.json` files with the final instructions for traceability. Profiles also store `tool_names` for the tools sent to the provider. Harness profiles with `tool_policy` enabled receive the full set, including `standard.shell.bash`, `harness.subagent.run`, and `multi_tool_use.parallel`; NoHarness profiles receive standard web/fs/data tools but omit those three.
+Run-level `harness_modules` are the effective booleans after applying API/UI overrides to the project config. They are stored in `run.json` and repeated in profile `input.json` files with the final instructions for traceability. Supported image attachments are stored on `run.json` as provider-ready image URLs; profile `input.json` repeats only attachment metadata. Profiles also store `tool_names` for the tools sent to the provider. Harness profiles with `tool_policy` enabled receive the full set, including `standard.shell.bash`, `standard.code.container_exec`, `harness.subagent.run`, and `multi_tool_use.parallel`; NoHarness profiles receive standard web/fs/data tools but omit those four.
 Older artifacts that use `context_manifest` are read as `context_summary` for backward compatibility.
 
 Profile `input.json`:
@@ -129,14 +129,23 @@ Profile `input.json`:
   "instructions": "Final provider instructions",
   "harness_modules": { "tool_policy": true },
   "conversation_messages": [],
-  "tool_names": ["standard.shell.bash", "standard.web.fetch", "standard.fs.read", "harness.subagent.run", "multi_tool_use.parallel"],
+  "attachments": [
+    {
+      "kind": "image",
+      "name": "screen.png",
+      "mime_type": "image/png",
+      "size_bytes": 1843473,
+      "detail": "auto"
+    }
+  ],
+  "tool_names": ["standard.shell.bash", "standard.code.container_exec", "standard.web.fetch", "standard.fs.read", "harness.subagent.run", "multi_tool_use.parallel"],
   "created_at": "2026-05-22T00:00:00+00:00"
 }
 ```
 
-Tool call events are stored in `{profile_id}/events.jsonl` as provider events with `type: "tool_call"` and a raw payload containing the tool name, masked/truncated arguments, elapsed milliseconds, and either a result summary or structured error.
+Tool call events are stored in `{profile_id}/events.jsonl` as provider events with `type: "tool_call"` and a raw payload containing the tool name, masked/truncated arguments, elapsed milliseconds, and either a result summary or structured error. Container code tool calls return stdout, stderr, exit code, elapsed milliseconds, Docker image name, network mode, and truncation status from an offline temporary workspace copy; they do not directly modify the original repository.
 
-Subagent calls are created from the current `~/.harnessdiff/agents/` definitions when `harness.subagent.run` is invoked. They are ephemeral provider requests with tools disabled, and their artifacts are stored under the caller profile without replacing the caller profile output:
+Subagent calls are created from the current `~/.harnessdiff/agents/` definitions when `harness.subagent.run` is invoked. They are ephemeral provider requests, and their artifacts are stored under the caller profile without replacing the caller profile output. Subagents run with tools disabled unless their definition declares an allowed `tools:` frontmatter value; currently web aliases such as `WebSearch` and `WebFetch` map to the standard web search/fetch tools only.
 
 ```text
 runs/{run_id}/{profile_id}/subagents/{subagent_id}/

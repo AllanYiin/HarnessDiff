@@ -21,6 +21,7 @@ It currently implements the Chat surface only. Workflow, Agent, and MultiAgents 
 - Python 3.10+
 - Node.js 22+
 - Corepack / pnpm for frontend dependencies
+- Docker for the Harness container code interpreter
 - `OPENAI_API_KEY` for live OpenAI streaming
 
 ## Quick Start
@@ -139,9 +140,11 @@ These switches affect only the `Harness` pane. `NoHarness` keeps the direct base
 
 When `source_map` and `tool_policy` are enabled together, Harness web tool results are carried into final answer synthesis with citation guidance so web-supported claims can include inline Markdown links and a short `Sources` section.
 
+When `tool_policy` is enabled, the Harness pane can also call `standard.code.container_exec` to run Python, Node.js, pnpm, React/Vite, tests, and builds in a Docker container. The tool copies the repository into a temporary workspace, runs with network disabled, applies CPU/memory/pid limits, and returns stdout/stderr/exit code as a normal tool call. It does not write changes back to the original repository.
+
 ## Skills
 
-HarnessDiff creates `~/.harnessdiff` at startup with `CLAUDE.md`, `AGENTS.md`, `agents.md`, `agents/`, and `skills/`. `AGENTS.md` is appended to provider instructions for every chat turn. The `agents/` folder stores editable subagent definition files; `harness.subagent.run` loads those definitions when invoked, runs the selected subagent as an ephemeral isolated provider request, and persists its token usage under the caller profile for analysis rollup. The UI skill panel lists installed skills from `~/.harnessdiff/skills`, imports `.zip`, `.skill`/`.md`, or folder uploads, and reveals full `SKILL.md` content only after a skill is selected.
+HarnessDiff creates `~/.harnessdiff` at startup with `CLAUDE.md`, `AGENTS.md`, `agents.md`, `agents/`, and `skills/`. `AGENTS.md` is appended to provider instructions for every chat turn. The `agents/` folder stores editable subagent definition files; `harness.subagent.run` loads those definitions when invoked, runs the selected subagent as an ephemeral isolated provider request, and persists its token usage under the caller profile for analysis rollup. Subagents normally run without tools, but a definition can opt in to narrow web access with `tools: WebSearch, WebFetch`; HarnessDiff maps those aliases to standard web search/fetch tools and injects a five-query, dedupe, fetch, and note-taking workflow. The UI skill panel lists installed skills from `~/.harnessdiff/skills`, imports `.zip`, `.skill`/`.md`, or folder uploads, and reveals full `SKILL.md` content only after a skill is selected.
 
 On the first run in a new conversation, HarnessDiff adds only the first layer of installed skills to provider context: `name` and `description`.
 

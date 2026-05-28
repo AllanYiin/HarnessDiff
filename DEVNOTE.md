@@ -9,7 +9,7 @@
 ## 📌 SNAPSHOT — 當前狀態
 <!-- 這一整段每次 /devnote 會被覆寫，只反映「到目前為止的最新狀態」 -->
 
-**最後更新**：2026-05-25 06:37
+**最後更新**：2026-05-25 22:21
 
 ### 需求狀態
 - [x] Stage 0：localhost web app / FastAPI skeleton、README、env 樣板、storage/provider docs。
@@ -27,11 +27,16 @@
 - [x] Composer input：迴紋針整合檔案/圖片匯入；支援 Ctrl+V 貼上檔案、txt/md 讀文字、csv 產生 DataFrame-style preview、Office/PDF metadata 摘要、圖片 browser preview、麥克風 Web Speech API 轉文字。
 - [x] Skill system：啟動/技能 API 會建立 `~/.harnessdiff`、`CLAUDE.md`、`AGENTS.md`、`agents.md`、`skills/`；UI 可檢視技能、匯入 zip/skill/folder、逐步揭露完整 `SKILL.md`。
 - [x] Skill context：新對話第一回合自動放入已安裝技能第一層 `name/description`；輸入框支援 `/skill-id` slash command，送出時載入對應完整 `SKILL.md` 作為本回合上下文。
+- [x] Vision input：PNG/JPEG/WEBP/GIF 圖片附件會以 base64 data URL 傳入 OpenAI Responses API `input_image`，兩側 profile 都能真正讀圖。
+- [x] Voice input UX：麥克風改成按下即開始、放開/取消自動停止，並支援 Space/Enter 鍵盤按住行為。
+- [x] Skill slash token UI：Composer 內已安裝 skill slash command 會顯示成 teal chip，`contenteditable=false`，Backspace/Delete 會整塊刪除。
+- [ ] User message image rendering：使用者訊息 bubble 顯示圖片縮圖的程式已加入，但本次 `/devnote` 前尚未完成 TypeScript / Vitest / Playwright 驗證。
 
 ### 未解問題
 - 本機 `npm` shim 壞掉，已改用 Corepack pnpm 的實際路徑或 `corepack pnpm`。
-- Office/PDF 深度文字抽取、CSV 真正 pandas DataFrame、圖片真正 PIL `Image.open(file)` 仍只是前端 metadata/preview 基礎接入；若要完整解析需新增後端 upload/parse endpoint。
-- Web Speech API 瀏覽器支援不一致，且會受麥克風權限影響；目前只有前端基礎接入與 Playwright mock 測試。
+- Office/PDF 深度文字抽取、CSV 真正 pandas DataFrame、非圖片 binary provider upload 仍未實作；若要完整解析需新增後端 upload/parse endpoint。
+- Web Speech API 瀏覽器支援不一致，且會受麥克風權限影響；目前以前端 Web Speech API + Playwright mock 驗證互動。
+- 新的 contenteditable prompt editor 取代 textarea；後續測試或 selector 不應再假設 composer 是 `textarea`。
 
 ### 關鍵技術決策（當前有效）
 > 歷史上做過的、目前仍然成立的決策摘要。被推翻的決策不列。
@@ -53,6 +58,10 @@
 - **Attachment context first**：附件目前不新增後端 binary upload schema；前端先將可讀摘要併入 prompt，保留後端解析擴充點（詳見 HISTORY `[2026-05-25 06:37]`）。
 - **User-level skill home**：技能存放在 `~/.harnessdiff/skills`，可用 `HARNESSDIFF_HOME` 覆寫；新對話只自動放第一層清單，完整 `SKILL.md` 只在 UI 選取或 slash command 時載入（詳見 HISTORY `[2026-05-25 06:37]`）。
 - **Skill imports use JSON base64**：zip/skill/folder 匯入走 JSON base64，避免新增 multipart 依賴；zip/folder import 必須 path traversal 防護（詳見 HISTORY `[2026-05-25 06:37]`）。
+- **Responses vision input**：支援圖片附件時，前端產生 data URL，後端以 provider-neutral `LLMImageAttachment` 傳給 OpenAI Responses `input_image`（詳見 HISTORY `[2026-05-25 22:21]`）。
+- **Press-and-hold voice input**：語音輸入控制採 Pointer Events + pointer capture，按下開始、放開/取消停止；鍵盤 Space/Enter 同步支援（詳見 HISTORY `[2026-05-25 22:21]`）。
+- **Skill command as atomic token**：Composer 由 textarea 改為 ARIA `textbox` contenteditable，已安裝 `/skill-id` 渲染為不可編輯 chip，但送出 payload 仍是普通文字（詳見 HISTORY `[2026-05-25 22:21]`）。
+- **Message attachments are display-only**：對話 bubble 圖片顯示使用 `Message.attachments`，不改 provider prompt；provider input 和 UI preview 是兩條資料路徑（詳見 HISTORY `[2026-05-25 22:21]`）。
 
 ### 已知地雷（仍需注意）
 > 踩過且未來仍可能重踩的坑的一句話提醒。已徹底不可能重現的不列。
@@ -73,6 +82,8 @@
 - **compileall / tsbuildinfo sandbox writes**：預設 `__pycache__`、`C:\tmp`、`apps/web/tsconfig.tsbuildinfo` 或 Vite temp 寫入可能被 sandbox 擋；Python 可用 repo 內 `.compile_pycache`，前端檢查通常需 escalated。
 - **Import-time home writes**：`app = create_app()` 不可在 import 階段立即寫 `~/.harnessdiff`，否則測試 collection 會因 sandbox 權限炸掉；home 初始化需 lazy ensure。
 - **Zip/folder skill import path traversal**：匯入相對路徑不可信任，必須拒絕絕對路徑、空 path parts 與 `..`。
+- **Prompt editor selector change**：Composer 不再是 `textarea`，e2e 與 UI 操作要改用 `.promptEditor` 或 ARIA textbox。
+- **Blob URL lifecycle**：送出後 `clearAttachments()` 會 revoke browser `blob:` URL；需要在對話中持續顯示圖片時，必須先複製 `dataUrl` 到 display-only message attachment。
 
 ---
 
@@ -391,3 +402,50 @@
 ### 備註
 - 主要驗證結果：`python -m pytest` 42 passed；`python -X pycache_prefix=.compile_pycache -m compileall apps\api` 通過；TypeScript build 通過；Vitest 12 passed；Vite build 通過；Playwright 26 passed；`python scripts\apsm_validate.py --project .` valid。
 - 仍需補強：Office/PDF 深度解析、真正 pandas DataFrame/PIL 物件、後端 binary upload contract、Web Speech API 權限/瀏覽器支援提示，以及 web citation 的強制 post-check。
+
+---
+
+## [2026-05-25 22:21] Vision input, press-and-hold voice, skill chips, and image bubble display
+
+### 本次做了什麼（增量）
+本次 session 先修正語音輸入互動，將「點一下開始、再點一下結束」改為「按下開始、放開/取消停止」。接著接入 OpenAI Responses API 視覺輸入：前端圖片附件會產生 data URL，建立 run 時帶 `attachments`，後端以 `LLMImageAttachment` 傳入 provider，OpenAI payload 會組成 `input_text` + `input_image`。之後把 skill slash command 從普通文字改成 teal chip token，避免和一般 prompt 混淆，並支援整塊刪除。最後開始處理「圖片應顯示在對話中」：已新增 display-only `Message.attachments`、ChatPane 圖片縮圖 render 與 e2e 斷言，但在使用者要求 `/devnote` 時尚未跑完驗證。
+
+### 本次重大技術決策
+- **圖片能力分成 provider input 與 UI display 兩條路徑**
+  - 內容：provider 讀圖走 `RunCreate.attachments` / `LLMImageAttachment` / Responses `input_image`；對話中顯示走 `Message.attachments`，只作為 display-only UI metadata。
+  - 理由：provider payload 需要穩定、可保存、可重播；UI 預覽需要避免被送出後 `URL.revokeObjectURL()` 破壞，兩者生命週期不同。
+  - 影響：後續若要歷史 transcript 也顯示圖片，需要在 storage/transcript 裡保存可顯示的 attachment metadata 或 artifact，而不是只依賴前端 runtime state。
+- **圖片用 data URL 先接 Responses vision**
+  - 內容：前端只對 PNG/JPEG/WEBP/GIF 產生 base64 data URL，後端驗證 MIME 與 URL scheme，再傳給 OpenAI Responses `input_image`。
+  - 理由：避免先設計 multipart upload/binary artifact contract，也能保持既有 run API 向前相容。
+  - 影響：大型圖片會增加 JSON payload；若未來支援大檔/多圖/歷史重放，應改為後端 upload artifact + URL/file reference。
+- **語音按住互動用 Pointer Events**
+  - 內容：`pointerdown` start、`pointerup`/`pointercancel` stop，並用 pointer capture 提高滑鼠/觸控拖出按鈕時的結束可靠性；Space/Enter 也做 keydown/keyup。
+  - 理由：長按是 press lifecycle，不是 click toggle；只靠 click 無法表達放開停止。
+  - 影響：未來若改成真正錄音或 Realtime API，也應沿用 press lifecycle。
+- **Skill slash command 以 contenteditable atomic token 呈現**
+  - 內容：Composer 輸入從 textarea 改成 `role="textbox" aria-multiline="true"` 的 contenteditable；已安裝 skill slash command 渲染為 `contenteditable=false` chip，但底層 value 仍是 `/skill-id ` 文字。
+  - 理由：textarea 不能局部上色或做不可逐字編輯 token；contenteditable 才能提供 chip 視覺和原子刪除。
+  - 影響：測試、Playwright selector、外部操作不應再找 `textarea`；要用 `.promptEditor` 或 ARIA textbox。
+
+### 本次失敗經驗與填坑
+- **圖片送進模型但對話中看不到**
+  - 試過無效：只把圖片轉成 provider attachment；user bubble 仍只 render prompt markdown，因此畫面只有 metadata 文字。
+  - 最終解法：新增 `Message.attachments` 與 ChatPane `.messageAttachmentGrid`，用 display-only data URL 顯示 `<img>`。
+  - 根因：LLM provider input 與 UI message render 是兩條不同資料流；前者成功不會自動讓後者顯示圖片。
+- **清附件會讓 blob URL 失效**
+  - 試過無效：若 user message 只保存 `attachment.url` 的 blob URL，送出後 `clearAttachments()` 會 revoke，對話圖片可能失效。
+  - 最終解法：message display attachment 優先保存 `attachment.dataUrl`，只有非圖片或沒有 data URL 時才 fallback 到 `url`。
+  - 根因：blob URL 是 browser runtime resource，不是可長期保存的 message artifact。
+- **textarea 無法滿足 skill token 需求**
+  - 試過無效：只改 slash command 文字顏色；textarea 只能整體樣式，不能局部 token 化，也不能禁止部分文字被逐字編輯。
+  - 最終解法：改成 contenteditable editor，自己做 plain text extraction、selection offset、token render 與 Backspace/Delete 整塊刪除。
+  - 根因：原生 textarea 是 plain text control，不支援內嵌不可編輯元素。
+- **本地驗證常被 Windows 權限與 sandbox 寫入擋住**
+  - 試過無效：直接跑 TypeScript/Vitest/Vite/Playwright 時多次遇到 `EPERM` 寫 `tsconfig.tsbuildinfo`、`.vite-temp` 或 `test-results`。
+  - 最終解法：必要驗證命令用 sandbox escalation；後端 compileall 也可能需要寫 `__pycache__` 權限。
+  - 根因：工具鏈會寫入 build cache / report artifact，而這些路徑不一定在預設 sandbox 可寫範圍內。
+
+### 備註
+- 已完成驗證：OpenAI provider / run API tests 28 passed；TypeScript build 通過；Vitest 14 passed；語音 e2e desktop/mobile passed；skill slash command e2e desktop/mobile passed；完整 Playwright 26 passed；Vite production build 通過。
+- 尚未完成驗證：`Message.attachments` 圖片 bubble 顯示改動是在 `/devnote` 前剛加入，需接續跑 TypeScript、Vitest、相關 Playwright attachment case 與 build。

@@ -45,8 +45,16 @@ started with the ToolAnything runtime loaded:
   "harnessdiff_home": "C:\\Users\\you\\.harnessdiff",
   "tools": {
     "enabled": true,
-    "count": 15,
-    "names": ["standard.web.search", "standard.shell.bash", "harness.subagent.run", "multi_tool_use.parallel"]
+    "count": 16,
+    "names": ["standard.web.search", "standard.shell.bash", "standard.code.container_exec", "harness.subagent.run", "multi_tool_use.parallel"],
+    "container_runtime": {
+      "available": false,
+      "docker_found": true,
+      "daemon_available": true,
+      "image_present": false,
+      "image": "harnessdiff-code-runtime:latest",
+      "message": "Docker image is not built: harnessdiff-code-runtime:latest"
+    }
   }
 }
 ```
@@ -188,6 +196,16 @@ Request:
   "input_mode": "integrated",
   "model": "gpt-5.4-mini",
   "reasoning_effort": "medium",
+  "attachments": [
+    {
+      "kind": "image",
+      "name": "screen.png",
+      "mime_type": "image/png",
+      "size_bytes": 1843473,
+      "image_url": "data:image/png;base64,...",
+      "detail": "auto"
+    }
+  ],
   "target_panes": ["NoHarness", "Harness"],
   "harness_modules": {
     "context_summary": true,
@@ -207,6 +225,7 @@ Important fields:
 
 - `prompt`: required
 - `input_mode`: `integrated` or `independent`
+- `attachments`: optional supported image inputs for OpenAI vision; `image_url` must be a data URL or fully qualified URL.
 - `target_panes`: one or both of `NoHarness`, `Harness`
 - `harness_modules`: optional per-run overrides; merged with `config/harness.default.json`
   - Legacy payloads using `context_manifest` are accepted and normalized to `context_summary`.
@@ -283,9 +302,9 @@ runs/{run_id}/{pane}/usage.json
 runs/{run_id}/analysis/analysis.json
 ```
 
-Profiles write `tool_names` to `input.json` when tools are available, and successful or failed tool calls are preserved as `tool_call` rows in `events.jsonl`. Harness chat profiles with `tool_policy` enabled include `standard.shell.bash`, `harness.subagent.run`, and `multi_tool_use.parallel`; NoHarness profiles omit those three while retaining standard web/fs/data tools. `harness.subagent.run` accepts `subagent_id`, `task`, and `context`, then returns the subagent result as a normal function tool output.
+Profiles write `tool_names` to `input.json` when tools are available, and successful or failed tool calls are preserved as `tool_call` rows in `events.jsonl`. Harness chat profiles with `tool_policy` enabled include `standard.shell.bash`, `standard.code.container_exec`, `harness.subagent.run`, and `multi_tool_use.parallel`; NoHarness profiles omit those four while retaining standard web/fs/data tools. `standard.code.container_exec` accepts `command`, optional `workdir`, and optional `timeout_seconds`, then runs the command in an offline Docker container against a temporary repository copy. `harness.subagent.run` accepts `subagent_id`, `task`, and `context`, then returns the subagent result as a normal function tool output.
 
-Subagent definitions are loaded from `~/.harnessdiff/agents/` when `harness.subagent.run` is invoked. Subagent instances are ephemeral and do not keep live state after the tool call, but their artifacts and token usage remain on disk. Subagent tool calls additionally write:
+Subagent definitions are loaded from `~/.harnessdiff/agents/` when `harness.subagent.run` is invoked. Subagent instances are ephemeral and do not keep live state after the tool call, but their artifacts and token usage remain on disk. Definitions may include `tools: WebSearch, WebFetch` to let that subagent use only the mapped standard web search/fetch tools during its provider request; definitions without `tools:` still run with tools disabled. Subagent tool calls additionally write:
 
 ```text
 runs/{run_id}/{profile_id}/subagents/{subagent_id}/input.json

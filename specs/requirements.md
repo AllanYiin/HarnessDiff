@@ -5,6 +5,7 @@
 - 以 localhost web app 形式提供 HarnessDiff Chat workbench。
 - 左側 `NoHarness` 使用 baseline instructions；右側 `Harness` 套用可開關 Harness modules。
 - 支援 OpenAI Responses API streaming。
+- 支援 PNG/JPEG/WEBP/GIF 圖片附件進入 OpenAI Responses API vision input；非圖片附件目前仍以 prompt metadata/文字摘要進入上下文。
 - 前端與測試不得用假串流、route fixture 或 mock 成功回應掩蓋 backend/API/provider 契約失敗；測試替身只可用於隔離外部不可控依賴，且不得取代整合驗證。
 - 支援本機 JSON 保存 project/run/input/output/events/usage/analysis。
 - 支援 deterministic current-turn 與 cumulative token/context analysis。
@@ -12,6 +13,7 @@
 - 支援新對話、歷史對話紀錄檢視、自動對話命名與暫停執行。
 - 支援 independent mode 中各 pane 獨立送出與串流；單一 pane 執行中不得鎖住另一個 pane。
 - Harness pane 啟用 `source_map` 與 `tool_policy` 且使用 web tools 時，web tool output 必須把可引用 URL 帶入最終回答合成脈絡，讓 web-supported claims 可產生 inline Markdown links 與簡短 `Sources` 區塊。
+- Harness pane 啟用 `tool_policy` 時，必須可使用 container-based code interpreter，在暫存 repo 副本中以 Docker 執行 Python、Node.js、pnpm、React/Vite、測試與 build 命令；NoHarness 不得取得此工具。
 - 自動建立 `~/.harnessdiff`、`CLAUDE.md`、`AGENTS.md`、`agents.md` 與 `skills/`；技能可由 UI 檢視與匯入 `.zip`、`.skill`/Markdown 單檔或資料夾。
 - 開啟新對話後的第一個 run 必須將已安裝技能第一層清單放入 provider 上文，內容限 `name` 與 `description`，完整 `SKILL.md` 僅在使用者選取或匯入時漸進式揭露。
 - 對話輸入框支援技能 slash command：輸入 `/` 顯示已安裝技能候選，插入或手打 `/skill-id` 後送出，該 run 必須載入對應完整 `SKILL.md` 作為本回合技能上下文。
@@ -26,6 +28,7 @@
 - input mode：`integrated` / `independent`
 - target panes：`NoHarness` / `Harness`
 - per-run `harness_modules`
+- supported image attachments
 - installed skills first-layer context on a new conversation's first run
 
 輸出：
@@ -109,6 +112,7 @@ Deferred blocks:
 - Python 3.10+
 - Node.js 22+
 - Corepack/pnpm
+- Docker for container code execution
 - OpenAI API key for live streaming
 
 ## 使用情境判定

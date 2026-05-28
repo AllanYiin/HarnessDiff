@@ -40,10 +40,11 @@ For the first Chat MVP release, include:
 
 - dual-pane Harness vs NoHarness Chat workbench
 - OpenAI Responses API streaming
+- OpenAI Responses API vision input for supported image attachments
 - per-run Harness module toggles
 - local JSON artifacts for project/run/input/output/events/usage/analysis
 - deterministic current and cumulative token/context analysis
-- known limitations: Chat surface only, no real provider file/image upload, no voice input, stored history not yet replayed into provider context
+- known limitations: Chat surface only, no non-image binary provider upload, stored history not yet replayed into provider context
 
 ## Tagging
 
