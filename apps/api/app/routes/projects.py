@@ -56,6 +56,9 @@ async def get_project_transcript(request: Request, project_id: str) -> dict:
                         "output_text": store.read_profile_output_text(
                             project_id, run.id, profile.id
                         ),
+                        "steps": store.read_agent_steps(project_id, run.id, profile.id)
+                        if project.surface_type == "agent"
+                        else [],
                     }
                 )
             runs.append({**run.model_dump(mode="json"), "profiles": profiles})

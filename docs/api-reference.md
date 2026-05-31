@@ -2,7 +2,7 @@
 
 ## Overview
 
-This reference covers the local FastAPI surface implemented in the Chat MVP.
+This reference covers the local FastAPI surface for the executable Chat and Agent modes.
 
 Base URL during local development:
 
@@ -12,7 +12,7 @@ http://127.0.0.1:8000/api
 
 ## Version
 
-The app version is currently `0.0.0-stage0` in FastAPI metadata, while the implemented feature scope is complete through Stage 7 for the Chat MVP. Stored JSON documents use `schema_version` from backend settings.
+The app version is currently `0.0.0-stage0` in FastAPI metadata. Stored JSON documents use `schema_version` from backend settings.
 
 ## Parameters
 
@@ -25,7 +25,7 @@ Common body parameters:
 
 - `model`: OpenAI model id used by the provider adapter
 - `reasoning_effort`: reasoning effort passed to the OpenAI Responses API when set
-- `target_panes`: one or both of `NoHarness`, `Harness`
+- `target_panes`: legacy Chat wording for one or both of `NoHarness`, `Harness`; current payloads use `profiles`
 
 ## Health
 
@@ -130,7 +130,7 @@ Request:
 Important fields:
 
 - `name`: required, 1-120 characters
-- `surface_type`: `chat`, `workflow`, `agent`, or `multi_agents`; only `chat` is executable now
+- `surface_type`: `chat`, `workflow`, `agent`, or `multi_agents`; `chat` and `agent` are executable now
 - `config_profile`: defaults to `harness.default`
 
 Success: `201 Created`
@@ -147,7 +147,7 @@ Errors:
 
 ### `GET /projects/{project_id}/transcript`
 
-Returns a project plus ordered run records and saved pane outputs so the frontend can rebuild a conversation history view.
+Returns a project plus ordered run records and saved profile outputs so the frontend can rebuild Chat or Agent history.
 
 Response shape:
 
@@ -161,12 +161,16 @@ Response shape:
     {
       "id": "run_...",
       "prompt": "User prompt",
-      "target_panes": ["NoHarness", "Harness"],
+      "input_mode": "integrated",
       "status": "completed",
-      "panes": {
-        "NoHarness": { "output_text": "..." },
-        "Harness": { "output_text": "..." }
-      }
+      "profiles": [
+        {
+          "id": "harness_agent",
+          "label": "Harness Agent",
+          "output_text": "...",
+          "steps": []
+        }
+      ]
     }
   ]
 }
@@ -216,7 +220,16 @@ Request:
     "tool_policy": true,
     "memory_selection": true,
     "post_answer_critique": true,
-    "token_budgeter": true
+    "token_budgeter": true,
+    "consequence_gate": true
+  },
+  "surface_payload": {
+    "type": "agent",
+    "objective": "Inspect the repository",
+    "context": "",
+    "max_steps": 16,
+    "allow_subagents": true,
+    "allow_container_tools": true
   }
 }
 ```
@@ -229,6 +242,9 @@ Important fields:
 - `target_panes`: one or both of `NoHarness`, `Harness`
 - `harness_modules`: optional per-run overrides; merged with `config/harness.default.json`
   - Legacy payloads using `context_manifest` are accepted and normalized to `context_summary`.
+  - `consequence_gate` applies only to Harness profiles and records pre-provider `harness_decision` events for externally visible publication-like prompts.
+  - Consequence preflight may include missing context, required scanner coverage gaps, scanner findings, similarity matches, claim evidence gaps, offer disclosure gaps, provenance/rights findings and gaps, and rollback readiness gaps. HarnessDiff records these as preview decisions before provider execution; it does not make NoHarness use the gate.
+- `surface_payload`: optional. Agent projects accept an `agent` payload with objective/context/max step hints. If omitted for an Agent project, the backend derives the objective from `prompt`.
 
 Success: `201 Created`
 
@@ -242,6 +258,10 @@ Common event types:
 
 - `created`
 - `delta`
+- `tool_call`
+- `agent_step_started`
+- `agent_step_completed`
+- `agent_step_error`
 - `completed`
 - `error`
 - `analysis_ready`
@@ -269,9 +289,9 @@ Failure path:
 
 ### `GET /runs/{run_id}/analysis`
 
-Returns `analysis/analysis.json`.
+Returns deterministic analysis for the run.
 
-If the artifact is missing and the run data exists, the API builds analysis lazily from local JSON artifacts.
+For Chat projects this reads or lazily rebuilds `analysis/analysis.json`. For Agent projects this reads or lazily rebuilds `analysis/agent-analysis.json`.
 
 Analysis includes:
 
@@ -282,6 +302,7 @@ Analysis includes:
 - tool definition context for profiles where tools were sent
 - Harness vs NoHarness token deltas
 - notes about estimated section tokens
+- Agent-only structural metrics under `raw_sources.agent_metrics`, including step, tool, subagent reference, error, and Harness decision counts
 
 ## Token Usage Notes
 
@@ -302,7 +323,23 @@ runs/{run_id}/{pane}/usage.json
 runs/{run_id}/analysis/analysis.json
 ```
 
-Profiles write `tool_names` to `input.json` when tools are available, and successful or failed tool calls are preserved as `tool_call` rows in `events.jsonl`. Harness chat profiles with `tool_policy` enabled include `standard.shell.bash`, `standard.code.container_exec`, `harness.subagent.run`, and `multi_tool_use.parallel`; NoHarness profiles omit those four while retaining standard web/fs/data tools. `standard.code.container_exec` accepts `command`, optional `workdir`, and optional `timeout_seconds`, then runs the command in an offline Docker container against a temporary repository copy. `harness.subagent.run` accepts `subagent_id`, `task`, and `context`, then returns the subagent result as a normal function tool output.
+Completed Agent runs use profile ids such as `baseline_agent` and `harness_agent`, write step traces, and generate an Agent-specific analysis artifact:
+
+```text
+runs/{run_id}/baseline_agent/input.json
+runs/{run_id}/baseline_agent/events.jsonl
+runs/{run_id}/baseline_agent/steps.jsonl
+runs/{run_id}/baseline_agent/output.json
+runs/{run_id}/baseline_agent/usage.json
+runs/{run_id}/harness_agent/input.json
+runs/{run_id}/harness_agent/events.jsonl
+runs/{run_id}/harness_agent/steps.jsonl
+runs/{run_id}/harness_agent/output.json
+runs/{run_id}/harness_agent/usage.json
+runs/{run_id}/analysis/agent-analysis.json
+```
+
+Profiles write `tool_names` to `input.json` when tools are available, and successful or failed tool calls are preserved as `tool_call` rows in `events.jsonl`. Harness chat profiles and `Harness Agent` with `tool_policy` enabled include `standard.shell.bash`, `standard.code.container_exec`, `harness.subagent.run`, and `multi_tool_use.parallel`; `NoHarness` and `NoHarness Agent` omit those four while retaining standard web/fs/data tools. `standard.code.container_exec` accepts `command`, optional `workdir`, and optional `timeout_seconds`, then runs the command in an offline Docker container against a temporary repository copy. `harness.subagent.run` accepts `subagent_id`, `task`, and `context`, then returns the subagent result as a normal function tool output.
 
 Subagent definitions are loaded from `~/.harnessdiff/agents/` when `harness.subagent.run` is invoked. Subagent instances are ephemeral and do not keep live state after the tool call, but their artifacts and token usage remain on disk. Definitions may include `tools: WebSearch, WebFetch` to let that subagent use only the mapped standard web search/fetch tools during its provider request; definitions without `tools:` still run with tools disabled. Subagent tool calls additionally write:
 
@@ -313,4 +350,5 @@ runs/{run_id}/{profile_id}/subagents/{subagent_id}/output.json
 runs/{run_id}/{profile_id}/subagents/{subagent_id}/usage.json
 ```
 
-Failed runs write run and pane error artifacts but skip `analysis/analysis.json`.
+Failed runs write run and profile error artifacts but skip full comparison analysis.
+

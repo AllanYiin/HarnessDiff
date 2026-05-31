@@ -1,6 +1,6 @@
 # HarnessDiff Architecture
 
-HarnessDiff is a localhost web app for comparing chat behavior with and without a Harness layer.
+HarnessDiff is a localhost web app for comparing chat and agent behavior with and without a Harness layer.
 
 ## Current Architecture
 
@@ -25,11 +25,12 @@ Analysis must be deterministic by default. Stage 5 analysis reads local JSON art
 1. The frontend creates a project if needed.
 2. The frontend creates a run with prompt, target panes, model, reasoning effort, and Harness module overrides.
 3. The backend writes `run.json`.
-4. `RunOrchestrator` starts one async provider task per target pane.
-5. Each pane writes `input.json`, `events.jsonl`, `output.json`, and `usage.json`.
-6. When all panes complete successfully, the backend writes `analysis/analysis.json`.
-7. SSE sends `analysis_ready` and then `run_completed`.
-8. If any pane fails, the run is marked `failed`, SSE sends `run_failed`, and analysis is not written.
+4. The route layer selects `RunOrchestrator` for Chat projects or `AgentRunOrchestrator` for Agent projects.
+5. Chat starts one async provider task per target pane; Agent starts one foreground provider task per agent profile.
+6. Each profile writes `input.json`, `events.jsonl`, `output.json`, and `usage.json`; Agent profiles also write `steps.jsonl`.
+7. When all profiles complete successfully, the backend writes `analysis/analysis.json` for Chat or `analysis/agent-analysis.json` for Agent.
+8. SSE sends `analysis_ready` and then `run_completed`.
+9. If any profile fails, the run is marked `failed`, SSE sends `run_failed`, and complete comparison analysis is not written.
 
 ## Local Data Layout
 
@@ -52,6 +53,8 @@ data/projects/{project_id}/
     analysis/analysis.json
 ```
 
+Agent runs use `baseline_agent/` and `harness_agent/` profile folders. The Harness Agent can use shell/container/code tools, `harness.subagent.run`, and `multi_tool_use.parallel` when tool policy is enabled; the NoHarness Agent intentionally omits those higher-risk tools. Agent mode is foreground-only in this release: streaming, cancel, and traceable artifacts are supported, but background resume/checkpointing is not.
+
 ## Future Stages
 
-The current Chat MVP is complete through Stage 7. Future work can add Workflow, Agent, and MultiAgents surfaces without changing the provider boundary.
+The Chat surface and first Agent surface are complete through the Agent mode delivery stages. Future work can add Workflow and MultiAgents surfaces or durable Agent resume without changing the provider boundary.

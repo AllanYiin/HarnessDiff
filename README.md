@@ -2,16 +2,23 @@
 
 ## Overview
 
-HarnessDiff is a localhost teaching workbench for comparing the same chat task with and without a Harness layer.
+HarnessDiff is a localhost teaching workbench for comparing the same task with and without a Harness layer.
 
-It currently implements the Chat surface only. Workflow, Agent, and MultiAgents are reserved surface types for future stages.
+It implements two executable surfaces:
+
+- `Chat`: `NoHarness` vs `Harness` chat comparison.
+- `Agent`: `NoHarness Agent` vs `Harness Agent` foreground task execution with streaming output, cancel support, and traceable artifacts.
+
+`Workflow` and `MultiAgents` remain reserved surface types.
 
 ## What Works Now
 
 - Dual-pane chat comparison: `NoHarness` on the left, `Harness` on the right.
+- Dual-pane agent comparison: `NoHarness Agent` on the left, `Harness Agent` on the right.
+- TopBar surface switch between Chat and Agent. Running streams must be cancelled or completed before switching.
 - First turn can use integrated input; later turns can use independent pane input.
 - OpenAI Responses API streaming through a local FastAPI backend.
-- Project, run, input, output, event, usage, and analysis artifacts stored as local JSON.
+- Project, run, input, output, event, usage, step, subagent, and analysis artifacts stored as local JSON.
 - Per-run Harness module toggles for the Harness pane only.
 - Deterministic current-turn and cumulative token/context analysis.
 - Desktop and mobile Playwright smoke/regression coverage.
@@ -76,9 +83,18 @@ python scripts\apsm_validate.py --project . --strict
 python scripts\project_launcher.py --ensure-only
 python -m pytest
 python -m compileall apps\api
+cd apps\web
+node node_modules\typescript\bin\tsc -b
+node node_modules\vitest\vitest.mjs run src
+node node_modules\vite\bin\vite.js build
+node node_modules\@playwright\test\cli.js test
+```
+
+If running from the repository root instead, keep the web paths explicit:
+
+```powershell
 node apps\web\node_modules\typescript\bin\tsc -b apps\web
 node apps\web\node_modules\vitest\vitest.mjs run src --root apps\web
-node apps\web\node_modules\vite\bin\vite.js build apps\web
 node apps\web\node_modules\@playwright\test\cli.js test --config apps\web\playwright.config.ts
 ```
 
@@ -111,14 +127,26 @@ See [docs/api-reference.md](docs/api-reference.md) for endpoint details.
 
 ## Analysis
 
-The backend produces analysis after each streamed run:
+The backend produces deterministic analysis after completed streamed runs:
 
 - `GET /api/runs/{run_id}/analysis`
-- local artifact: `data/projects/{project_id}/runs/{run_id}/analysis/analysis.json`
+- Chat artifact: `data/projects/{project_id}/runs/{run_id}/analysis/analysis.json`
+- Agent artifact: `data/projects/{project_id}/runs/{run_id}/analysis/agent-analysis.json`
 
 The analysis is deterministic and reads saved JSON artifacts. Provider-reported usage is used for input, output, reasoning, and total tokens when `usage.json` exists. Context section token counts are marked as estimates derived from saved text length.
 
 Analysis is not an LLM call. It does not add token cost.
+
+## Agent Mode
+
+Agent mode is a first-version foreground runtime, not a durable background worker. It supports:
+
+- streaming final output for both agent profiles
+- cancel from the UI via the same foreground stream controller
+- step/tool/subagent trace events in the Agent workspace
+- local `steps.jsonl`, `events.jsonl`, `usage.json`, subagent artifacts, and `agent-analysis.json`
+
+`Harness Agent` may use shell/container/code tools, `harness.subagent.run`, and `multi_tool_use.parallel` when Harness tool policy is enabled. `NoHarness Agent` intentionally omits those higher-risk tools and keeps the baseline agent comparison clean.
 
 ## Harness Modules
 
@@ -132,6 +160,7 @@ The current module switches are:
 - `output_contract`
 - `planning_preamble`
 - `tool_policy`
+- `consequence_gate`
 - `memory_selection`
 - `post_answer_critique`
 - `token_budgeter`
@@ -141,6 +170,8 @@ These switches affect only the `Harness` pane. `NoHarness` keeps the direct base
 When `source_map` and `tool_policy` are enabled together, Harness web tool results are carried into final answer synthesis with citation guidance so web-supported claims can include inline Markdown links and a short `Sources` section.
 
 When `tool_policy` is enabled, the Harness pane can also call `standard.code.container_exec` to run Python, Node.js, pnpm, React/Vite, tests, and builds in a Docker container. The tool copies the repository into a temporary workspace, runs with network disabled, applies CPU/memory/pid limits, and returns stdout/stderr/exit code as a normal tool call. It does not write changes back to the original repository.
+
+When `consequence_gate` is enabled, the Harness pane adds pre-provider consequence preflight for prompts that look like externally visible publication, social, announcement, marketing, or customer-facing work. The gate records missing release context, required scanner coverage gaps, scanner findings, similarity matches, claim evidence gaps, offer disclosure gaps, provenance/rights findings and gaps, rollback gaps, risk hypotheses, and review needs as `harness_decision` events while keeping NoHarness as the direct baseline. HarnessDiff does not run OCR/CV/embedding engines in core; scanner results are structured adapter findings attached to the preflight context.
 
 ## Skills
 
@@ -192,3 +223,4 @@ node node_modules\@playwright\test\cli.js test
 See `docs/release-checklist.md` for the release checklist.
 
 Backend dependencies are listed in `requirements.txt`. ToolAnything is installed from the local wheel under `vendor/wheels` via the `--find-links` entry in `requirements.txt`.
+

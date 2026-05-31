@@ -5,6 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.models.agent import AgentRunConfig
 from app.models.harness_modules import normalize_harness_modules
 from app.models.project import utc_now_iso
 
@@ -51,6 +52,29 @@ def default_profiles() -> list[ProfileConfig]:
                 "memory_selection": True,
                 "post_answer_critique": True,
                 "token_budgeter": True,
+                "consequence_gate": True,
+            },
+        ),
+    ]
+
+
+def default_agent_profiles() -> list[ProfileConfig]:
+    return [
+        ProfileConfig(id="baseline_agent", label="NoHarness Agent", harness_modules={}),
+        ProfileConfig(
+            id="harness_agent",
+            label="Harness Agent",
+            harness_modules={
+                "context_summary": True,
+                "source_map": True,
+                "guardrails": True,
+                "output_contract": True,
+                "planning_preamble": True,
+                "tool_policy": True,
+                "memory_selection": True,
+                "post_answer_critique": True,
+                "token_budgeter": True,
+                "consequence_gate": True,
             },
         ),
     ]
@@ -90,6 +114,7 @@ class RunCreate(BaseModel):
     reasoning_effort: str = Field(default="medium", min_length=1)
     profiles: list[ProfileConfig] = Field(default_factory=default_profiles, min_length=1)
     attachments: list[RunAttachment] = Field(default_factory=list)
+    surface_payload: AgentRunConfig | None = None
 
 
 class RunDocument(BaseModel):
@@ -104,6 +129,7 @@ class RunDocument(BaseModel):
     reasoning_effort: str
     profiles: list[ProfileConfig]
     attachments: list[RunAttachment] = Field(default_factory=list)
+    surface_payload: AgentRunConfig | None = None
     status: RunStatus = RunStatus.submitted
     prompt: str
     created_at: str
@@ -130,6 +156,7 @@ def new_run_document(
         reasoning_effort=payload.reasoning_effort,
         profiles=profiles or payload.profiles,
         attachments=payload.attachments,
+        surface_payload=payload.surface_payload,
         prompt=payload.prompt,
         created_at=now,
         updated_at=now,

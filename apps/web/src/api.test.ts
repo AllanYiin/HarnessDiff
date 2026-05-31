@@ -39,7 +39,24 @@ describe("api response normalization", () => {
 
     await expect(createProject("First prompt")).resolves.toMatchObject({
       id: "proj_mock",
-      name: "First prompt"
+      name: "First prompt",
+      surface_type: "chat"
+    });
+  });
+
+  it("sends surface type when creating an agent project", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockJsonResponse({ id: "proj_agent", name: "Agent", surface_type: "agent" }, true, 201)
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(createProject("Agent", "agent")).resolves.toMatchObject({
+      id: "proj_agent",
+      surface_type: "agent"
+    });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      name: "Agent",
+      surface_type: "agent"
     });
   });
 
@@ -102,7 +119,7 @@ describe("api response normalization", () => {
       "fetch",
       vi.fn().mockResolvedValue(
         mockJsonResponse({
-          project: { id: "proj_history", name: "History" },
+          project: { id: "proj_history", name: "History", surface_type: "agent" },
           runs: [
             {
               id: "run_1",
@@ -120,7 +137,23 @@ describe("api response normalization", () => {
                 }
               ],
               profiles: [
-                { id: "baseline", label: "NoHarness", harness_modules: {}, output_text: "baseline" },
+                {
+                  id: "baseline",
+                  label: "NoHarness",
+                  harness_modules: {},
+                  output_text: "baseline",
+                  steps: [
+                    {
+                      profile_id: "baseline",
+                      profile_label: "NoHarness",
+                      step_id: "step_0001",
+                      sequence: 1,
+                      type: "agent_step_completed",
+                      label: "Run task",
+                      status: "completed"
+                    }
+                  ]
+                },
                 {
                   id: "controlled",
                   label: "Controlled",
@@ -136,7 +169,7 @@ describe("api response normalization", () => {
     );
 
     await expect(getProjectTranscript("proj_history")).resolves.toMatchObject({
-      project: { id: "proj_history", name: "History" },
+      project: { id: "proj_history", name: "History", surface_type: "agent" },
       runs: [
         {
           id: "run_1",
@@ -152,7 +185,23 @@ describe("api response normalization", () => {
             }
           ],
           profiles: [
-            { id: "baseline", label: "NoHarness", output_text: "baseline" },
+            {
+              id: "baseline",
+              label: "NoHarness",
+              output_text: "baseline",
+              steps: [
+                {
+                  id: "step_0001_agent_step_completed_1",
+                  profile_id: "baseline",
+                  profile_label: "NoHarness",
+                  step_id: "step_0001",
+                  sequence: 1,
+                  type: "agent_step_completed",
+                  label: "Run task",
+                  status: "completed"
+                }
+              ]
+            },
             {
               id: "controlled",
               label: "Controlled",

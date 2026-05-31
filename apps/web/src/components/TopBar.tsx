@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { History, Plus, Settings, Sparkles, SplitSquareHorizontal } from "lucide-react";
 
-import type { HarnessModuleId, HarnessModules } from "../types";
+import type { HarnessModuleId, HarnessModules, SurfaceType } from "../types";
+import { SurfaceSegmentedControl } from "./SurfaceSegmentedControl";
 
 const harnessModuleOptions: { id: HarnessModuleId; label: string }[] = [
   { id: "context_summary", label: "Context Summary" },
@@ -12,18 +13,22 @@ const harnessModuleOptions: { id: HarnessModuleId; label: string }[] = [
   { id: "tool_policy", label: "Tool Policy" },
   { id: "memory_selection", label: "Memory Selection" },
   { id: "post_answer_critique", label: "Post-answer Critique" },
-  { id: "token_budgeter", label: "Token Budgeter" }
+  { id: "token_budgeter", label: "Token Budgeter" },
+  { id: "consequence_gate", label: "Consequence Gate" }
 ];
 
 type TopBarProps = {
   model: string;
   reasoningEffort: string;
   harnessModules: HarnessModules;
+  surfaceType: SurfaceType;
   historyOpen: boolean;
   skillsOpen: boolean;
+  surfaceSwitchDisabled?: boolean;
   onModelChange: (value: string) => void;
   onReasoningEffortChange: (value: string) => void;
   onHarnessModuleChange: (id: HarnessModuleId, enabled: boolean) => void;
+  onSurfaceChange: (surfaceType: SurfaceType) => void;
   onNewConversation: () => void;
   onToggleHistory: () => void;
   onToggleSkills: () => void;
@@ -33,11 +38,14 @@ export function TopBar({
   model,
   reasoningEffort,
   harnessModules,
+  surfaceType,
   historyOpen,
   skillsOpen,
+  surfaceSwitchDisabled = false,
   onModelChange,
   onReasoningEffortChange,
   onHarnessModuleChange,
+  onSurfaceChange,
   onNewConversation,
   onToggleHistory,
   onToggleSkills
@@ -50,10 +58,15 @@ export function TopBar({
         <SplitSquareHorizontal aria-hidden="true" size={22} />
         <div>
           <strong>HarnessDiff</strong>
-          <span>Chat comparison</span>
+          <span>{surfaceType === "agent" ? "Agent comparison" : "Chat comparison"}</span>
         </div>
       </div>
       <div className="topControls" aria-label="Model controls">
+        <SurfaceSegmentedControl
+          value={surfaceType}
+          disabled={surfaceSwitchDisabled}
+          onChange={onSurfaceChange}
+        />
         <button className="textButton" type="button" onClick={onNewConversation}>
           <Plus aria-hidden="true" size={16} />
           新對話

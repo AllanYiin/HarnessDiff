@@ -600,6 +600,116 @@ textarea:disabled,
   overflow: hidden;
 }
 
+.agentWorkspace {
+  align-items: stretch;
+}
+
+.agentPane {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) minmax(132px, 0.42fr);
+  min-width: 0;
+  min-height: 0;
+  border-radius: var(--radius-panel);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+}
+
+.agentAnswer {
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-4);
+}
+
+.agentTraceTimeline,
+.agentTraceEmpty {
+  min-height: 0;
+  overflow: auto;
+  border-top: 1px solid #e2e8f0;
+  background: #f8fafc;
+  padding: var(--space-3);
+}
+
+.agentTraceEmpty {
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+}
+
+.agentTraceItem {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.agentTraceItem + .agentTraceItem {
+  margin-top: var(--space-2);
+}
+
+.agentTraceItem summary {
+  align-items: center;
+  cursor: pointer;
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  list-style: none;
+  padding: var(--space-2) var(--space-3);
+}
+
+.agentTraceItem summary::-webkit-details-marker {
+  display: none;
+}
+
+.traceStatus {
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  padding: 2px 8px;
+}
+
+.traceStatus.running {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.traceStatus.completed {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.traceStatus.error,
+.traceStatus.cancelled {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.traceLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.traceTime {
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+}
+
+.agentTraceItem dl {
+  display: grid;
+  gap: var(--space-1) var(--space-3);
+  grid-template-columns: max-content minmax(0, 1fr);
+  margin: 0;
+  padding: 0 var(--space-3) var(--space-3);
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+}
+
+.agentTraceItem dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .neutralProfile {
   border-top: 4px solid var(--color-neutral-profile);
 }
@@ -1201,6 +1311,13 @@ textarea:disabled,
   flex-wrap: wrap;
 }
 
+.analysisAside {
+  min-width: 0;
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+}
+
 .analysisMetrics span {
   min-height: 28px;
   display: inline-flex;
@@ -1214,12 +1331,60 @@ textarea:disabled,
   white-space: nowrap;
 }
 
+.riskSignals {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.riskSignals span {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #fed7aa;
+  border-radius: 7px;
+  background: #fff7ed;
+  color: #9a3412;
+  padding: 0 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .composerHeader {
   width: 100%;
   justify-content: space-between;
 }
 
-.segmented {
+.agentComposer {
+  align-items: stretch;
+  flex-direction: column;
+  gap: var(--space-2);
+  justify-content: center;
+  padding-block: var(--space-3);
+}
+
+.agentComposerMain {
+  align-items: stretch;
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: minmax(0, 1fr) auto;
+  width: 100%;
+}
+
+.agentComposer textarea {
+  min-height: 74px;
+  resize: none;
+}
+
+.agentComposerActions {
+  align-items: center;
+  display: flex;
+  gap: var(--space-2);
+}
+
+.segmented,
+.surfaceSegmented {
   display: inline-flex;
   max-width: 100%;
   padding: 3px;
@@ -1227,7 +1392,8 @@ textarea:disabled,
   background: #e2e8f0;
 }
 
-.segmented button {
+.segmented button,
+.surfaceSegmented button {
   min-height: 32px;
   border: 0;
   border-radius: 6px;
@@ -1236,10 +1402,16 @@ textarea:disabled,
   padding: 0 12px;
 }
 
-.segmented button.selected {
+.segmented button.selected,
+.surfaceSegmented button.selected {
   background: #ffffff;
   color: var(--color-text);
   box-shadow: 0 1px 2px rgb(15 23 42 / 0.12);
+}
+
+.surfaceSegmented button:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
 }
 
 .attachmentStrip {
@@ -1477,6 +1649,14 @@ select:focus {
     justify-content: flex-start;
   }
 
+  .analysisAside {
+    justify-items: start;
+  }
+
+  .riskSignals {
+    justify-content: flex-start;
+  }
+
   .composer {
     padding-inline: var(--space-3);
   }
@@ -1493,11 +1673,13 @@ select:focus {
     flex-direction: column;
   }
 
-  .segmented {
+  .segmented,
+  .surfaceSegmented {
     width: 100%;
   }
 
-  .segmented button {
+  .segmented button,
+  .surfaceSegmented button {
     flex: 1 1 0;
     min-width: 0;
     overflow-wrap: anywhere;

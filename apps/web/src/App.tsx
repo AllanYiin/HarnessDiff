@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AnalysisSummary } from "./components/AnalysisSummary";
+import { AgentComposer } from "./components/AgentComposer";
+import { AgentWorkspace } from "./components/AgentWorkspace";
 import { ChatPane } from "./components/ChatPane";
 import { Composer } from "./components/Composer";
 import { HistoryPanel } from "./components/HistoryPanel";
@@ -36,6 +38,7 @@ import {
   writePreferredReasoningEffort
 } from "./domain/userPreferences";
 import type {
+  AgentStepTrace,
   AttachmentPreview,
   HarnessModuleId,
   HarnessModules,
@@ -45,11 +48,13 @@ import type {
   ProfileId,
   ProfileInstance,
   ProfileState,
+  SurfaceType,
   VisionAttachmentInput
 } from "./types";
 
 const newConversationName = "新對話";
 const activeProjectStorageKey = "harnessdiff.activeProjectId";
+const preferredSurfaceStorageKey = "harnessdiff.preferredSurface";
 
 const defaultHarnessModules: HarnessModules = {
   context_summary: true,
@@ -60,12 +65,18 @@ const defaultHarnessModules: HarnessModules = {
   tool_policy: true,
   memory_selection: true,
   post_answer_critique: true,
-  token_budgeter: true
+  token_budgeter: true,
+  consequence_gate: true
 };
 
 const defaultProfiles: ProfileInstance[] = [
   { id: "baseline", label: "NoHarness", harness_modules: {} },
   { id: "harness", label: "Harness", harness_modules: defaultHarnessModules }
+];
+
+const defaultAgentProfiles: ProfileInstance[] = [
+  { id: "baseline_agent", label: "NoHarness Agent", harness_modules: {} },
+  { id: "harness_agent", label: "Harness Agent", harness_modules: defaultHarnessModules }
 ];
 
 function createMessage(
@@ -95,6 +106,10 @@ function createInitialProfileState(profiles: ProfileInstance[]): Record<ProfileI
   );
 }
 
+function profilesForSurface(surfaceType: SurfaceType) {
+  return surfaceType === "agent" ? defaultAgentProfiles : defaultProfiles;
+}
+
 function titleFromPrompt(prompt: string) {
   const compact = prompt.replace(/\s+/g, " ").trim();
   return compact.length > 32 ? `${compact.slice(0, 32)}...` : compact || newConversationName;
@@ -111,6 +126,7 @@ function errorMessage(error: unknown) {
 export function App() {
   const [model, setModel] = useState(readPreferredModel);
   const [reasoningEffort, setReasoningEffort] = useState(readPreferredReasoningEffort);
+  const [surfaceType, setSurfaceType] = useState<SurfaceType>(() => readPreferredSurface());
   const [turnCount, setTurnCount] = useState(0);
   const [inputMode, setInputMode] = useState<InputMode>("integrated");
   const [projectId, setProjectId] = useState<string | null>(null);
@@ -131,12 +147,13 @@ export function App() {
   const [subagents, setSubagents] = useState<SubagentSummary[]>([]);
   const [subagentsLoading, setSubagentsLoading] = useState(false);
   const [creatingSubagent, setCreatingSubagent] = useState(false);
-  const [profiles, setProfiles] = useState<ProfileInstance[]>(defaultProfiles);
+  const [profiles, setProfiles] = useState<ProfileInstance[]>(() => profilesForSurface(readPreferredSurface()));
   const [analysis, setAnalysis] = useState<AnalysisDocument | null>(null);
   const [integratedDraft, setIntegratedDraft] = useState("");
   const [attachments, setAttachments] = useState<AttachmentPreview[]>([]);
+  const [agentSteps, setAgentSteps] = useState<Record<ProfileId, AgentStepTrace[]>>({});
   const [profileState, setProfileState] = useState<Record<ProfileId, ProfileState>>(
-    createInitialProfileState(defaultProfiles)
+    () => createInitialProfileState(profilesForSurface(readPreferredSurface()))
   );
   const activeStreamControllers = useRef<Map<ProfileId, AbortController>>(new Map());
   const submittingProfilesRef = useRef<Set<ProfileId>>(new Set());
@@ -254,7 +271,11 @@ export function App() {
     submittingProfilesRef.current.clear();
   }
 
-  function resetConversationState(nextProjectId: string | null, nextProjectName = newConversationName) {
+  function resetConversationState(
+    nextProjectId: string | null,
+    nextProjectName = newConversationName,
+    nextSurfaceType = surfaceType
+  ) {
     abortActiveStreams();
     projectCreationRef.current = null;
     projectIdRef.current = nextProjectId;
@@ -266,8 +287,11 @@ export function App() {
     setAnalysis(null);
     setIntegratedDraft("");
     setAttachments([]);
-    setProfiles(defaultProfiles);
-    setProfileState(createInitialProfileState(defaultProfiles));
+    setSurfaceType(nextSurfaceType);
+    const nextProfiles = profilesForSurface(nextSurfaceType);
+    setProfiles(nextProfiles);
+    setProfileState(createInitialProfileState(nextProfiles));
+    setAgentSteps({});
     if (nextProjectId) {
       window.localStorage.setItem(activeProjectStorageKey, nextProjectId);
     } else {
@@ -280,9 +304,11 @@ export function App() {
     refreshSkills();
     refreshSubagents();
     try {
-      const project = await createProject(newConversationName);
+      const project = await createProject(newConversationName, surfaceType);
       setProjectId(project.id);
       setProjectName(project.name);
+      setSurfaceType(project.surface_type);
+      writePreferredSurface(project.surface_type);
       window.localStorage.setItem(activeProjectStorageKey, project.id);
       await refreshProjects();
     } catch {
@@ -357,8 +383,11 @@ export function App() {
     setHistoryLoading(true);
     try {
       const transcript = await getProjectTranscript(nextProjectId);
-      const nextProfiles = transcript.runs[0]?.profiles.map(({ output_text, ...profile }) => profile) ?? defaultProfiles;
+      const nextProfiles =
+        transcript.runs[0]?.profiles.map(({ output_text, steps, ...profile }) => profile) ??
+        profilesForSurface(transcript.project.surface_type);
       const nextProfileState = createInitialProfileState(nextProfiles);
+      const nextAgentSteps: Record<ProfileId, AgentStepTrace[]> = {};
       for (const run of transcript.runs) {
         for (const profile of run.profiles) {
           const state = nextProfileState[profile.id] ?? { ...initialProfileState, messages: [] };
@@ -376,12 +405,21 @@ export function App() {
             status: "done"
           });
           nextProfileState[profile.id] = state;
+          if (profile.steps.length > 0) {
+            nextAgentSteps[profile.id] = [
+              ...(nextAgentSteps[profile.id] ?? []),
+              ...profile.steps
+            ];
+          }
         }
       }
       setProjectId(transcript.project.id);
       setProjectName(transcript.project.name);
+      setSurfaceType(transcript.project.surface_type);
+      writePreferredSurface(transcript.project.surface_type);
       setProfiles(nextProfiles);
       setProfileState(nextProfileState);
+      setAgentSteps(nextAgentSteps);
       setTurnCount(transcript.runs.length);
       setInputMode(transcript.runs.length > 0 ? "independent" : "integrated");
       setAnalysis(null);
@@ -458,7 +496,8 @@ export function App() {
                     skill_id: event.skill_id ?? "",
                     status: event.status,
                     sequence: event.sequence,
-                    token_usage: event.token_usage
+                    token_usage: event.token_usage,
+                    metadata: event.metadata
                   }
                 ]
               }
@@ -482,6 +521,30 @@ export function App() {
               }
             : message
         )
+      }));
+    }
+  }
+
+  function applyAgentStreamEvent(event: RunStreamEvent, assistantIds: Record<ProfileId, string>) {
+    applyStreamEvent(event, assistantIds);
+    if (
+      event.agent_step &&
+      (event.type === "agent_step_started" ||
+        event.type === "agent_step_completed" ||
+        event.type === "agent_step_error")
+    ) {
+      const step = event.agent_step;
+      setAgentSteps((current) => ({
+        ...current,
+        [step.profile_id]: [
+          ...(current[step.profile_id] ?? []).filter(
+            (candidate) => !(candidate.step_id === step.step_id && candidate.type === step.type)
+          ),
+          {
+            id: `${step.step_id}_${step.type}_${step.sequence}`,
+            ...step
+          }
+        ]
       }));
     }
   }
@@ -527,12 +590,14 @@ export function App() {
     if (projectCreationRef.current) {
       return projectCreationRef.current;
     }
-    projectCreationRef.current = createProject(autoName)
+    projectCreationRef.current = createProject(autoName, surfaceType)
       .then((project) => {
         projectIdRef.current = project.id;
         projectNameRef.current = project.name;
         setProjectId(project.id);
         setProjectName(project.name);
+        setSurfaceType(project.surface_type);
+        writePreferredSurface(project.surface_type);
         window.localStorage.setItem(activeProjectStorageKey, project.id);
         refreshProjects();
         return project.id;
@@ -549,7 +614,8 @@ export function App() {
     targetProfileIds: ProfileId[],
     mode: InputMode,
     visionAttachments: VisionAttachmentInput[],
-    messageAttachments: MessageAttachment[]
+    messageAttachments: MessageAttachment[],
+    surfacePayload?: Record<string, unknown> | null
   ) {
     setAnalysis(null);
     const controller = new AbortController();
@@ -573,7 +639,8 @@ export function App() {
         model,
         reasoningEffort,
         profiles: activeProfiles,
-        attachments: visionAttachments
+        attachments: visionAttachments,
+        surfacePayload
       });
       await streamRun(
         run.id,
@@ -581,7 +648,11 @@ export function App() {
           if (event.type === "analysis_ready" && event.analysis) {
             setAnalysis(event.analysis);
           }
-          applyStreamEvent(event, assistantIds);
+          if (surfaceType === "agent") {
+            applyAgentStreamEvent(event, assistantIds);
+          } else {
+            applyStreamEvent(event, assistantIds);
+          }
         },
         controller.signal
       );
@@ -651,6 +722,40 @@ export function App() {
       updateProfileState(profileId, (current) => ({ ...current, draft: "" }));
       clearAttachments();
       void submitWithApi(prompt, draft, [profileId], "independent", visionAttachments, messageAttachments);
+    } catch (error) {
+      setSkillError(errorMessage(error));
+      setSkillsOpen(true);
+    }
+  }
+
+  async function submitAgentTask() {
+    const draft = integratedDraft.trim();
+    if ((!draft && attachments.length === 0) || running || submittingProfilesRef.current.size > 0) {
+      return;
+    }
+    try {
+      const prompt = await buildPromptWithContext(draft);
+      const visionAttachments = attachmentVisionInputs(attachments);
+      const messageAttachments = messageAttachmentPreviews(attachments);
+      setIntegratedDraft("");
+      clearAttachments();
+      setAgentSteps({});
+      void submitWithApi(
+        prompt,
+        draft,
+        profiles.map((profile) => profile.id),
+        "integrated",
+        visionAttachments,
+        messageAttachments,
+        {
+          type: "agent",
+          objective: draft || "Inspect attached files",
+          context: "",
+          max_steps: 16,
+          allow_subagents: true,
+          allow_container_tools: true
+        }
+      );
     } catch (error) {
       setSkillError(errorMessage(error));
       setSkillsOpen(true);
@@ -754,6 +859,16 @@ export function App() {
     writePreferredReasoningEffort(value);
   }
 
+  function handleSurfaceChange(nextSurfaceType: SurfaceType) {
+    if (running || nextSurfaceType === surfaceType) {
+      return;
+    }
+    writePreferredSurface(nextSurfaceType);
+    resetConversationState(null, newConversationName, nextSurfaceType);
+    setHistoryOpen(false);
+    setSkillsOpen(false);
+  }
+
   function pauseExecution() {
     abortActiveStreams();
     setProfileState((current) => {
@@ -784,11 +899,14 @@ export function App() {
         model={model}
         reasoningEffort={reasoningEffort}
         harnessModules={configurableHarnessModules}
+        surfaceType={surfaceType}
         historyOpen={historyOpen}
         skillsOpen={skillsOpen}
+        surfaceSwitchDisabled={running}
         onModelChange={updateModel}
         onReasoningEffortChange={updateReasoningEffort}
         onHarnessModuleChange={updateHarnessModule}
+        onSurfaceChange={handleSurfaceChange}
         onNewConversation={startNewConversation}
         onToggleHistory={() => {
           setHistoryOpen((current) => !current);
@@ -830,45 +948,74 @@ export function App() {
           onCreateSubagent={handleCreateSubagent}
         />
       ) : null}
-      <section className="workspace" aria-label="HarnessDiff chat comparison">
-        {profiles.map((profile) => (
-          <ChatPane
-            key={profile.id}
-            profile={profile}
-            messages={profileState[profile.id]?.messages ?? []}
-            streaming={profileState[profile.id]?.streaming ?? false}
-          />
-        ))}
-      </section>
+      {surfaceType === "agent" ? (
+        <AgentWorkspace profiles={profiles} profileState={profileState} steps={agentSteps} />
+      ) : (
+        <section className="workspace" aria-label="HarnessDiff chat comparison">
+          {profiles.map((profile) => (
+            <ChatPane
+              key={profile.id}
+              profile={profile}
+              messages={profileState[profile.id]?.messages ?? []}
+              streaming={profileState[profile.id]?.streaming ?? false}
+            />
+          ))}
+        </section>
+      )}
       <AnalysisSummary
         turnCount={turnCount}
         inputMode={inputMode}
         running={running}
         analysis={analysis}
       />
-      <Composer
-        inputMode={inputMode}
-        integratedDraft={integratedDraft}
-        profiles={profiles}
-        profileDrafts={Object.fromEntries(
-          profiles.map((profile) => [profile.id, profileState[profile.id]?.draft ?? ""])
-        )}
-        skills={skills}
-        attachments={attachments}
-        disabled={running}
-        profileDisabled={profileDisabled}
-        running={running}
-        onModeChange={setInputMode}
-        onIntegratedDraftChange={setIntegratedDraft}
-        onProfileDraftChange={(profileId, value) =>
-          updateProfileState(profileId, (current) => ({ ...current, draft: value }))
-        }
-        onAttach={handleAttach}
-        onRemoveAttachment={removeAttachment}
-        onSubmitIntegrated={submitIntegrated}
-        onSubmitProfile={submitProfile}
-        onPause={pauseExecution}
-      />
+      {surfaceType === "agent" ? (
+        <AgentComposer
+          draft={integratedDraft}
+          attachments={attachments}
+          disabled={running}
+          running={running}
+          onDraftChange={setIntegratedDraft}
+          onAttach={handleAttach}
+          onRemoveAttachment={removeAttachment}
+          onSubmit={submitAgentTask}
+          onCancel={pauseExecution}
+        />
+      ) : (
+        <Composer
+          inputMode={inputMode}
+          integratedDraft={integratedDraft}
+          profiles={profiles}
+          profileDrafts={Object.fromEntries(
+            profiles.map((profile) => [profile.id, profileState[profile.id]?.draft ?? ""])
+          )}
+          skills={skills}
+          attachments={attachments}
+          disabled={running}
+          profileDisabled={profileDisabled}
+          running={running}
+          onModeChange={setInputMode}
+          onIntegratedDraftChange={setIntegratedDraft}
+          onProfileDraftChange={(profileId, value) =>
+            updateProfileState(profileId, (current) => ({ ...current, draft: value }))
+          }
+          onAttach={handleAttach}
+          onRemoveAttachment={removeAttachment}
+          onSubmitIntegrated={submitIntegrated}
+          onSubmitProfile={submitProfile}
+          onPause={pauseExecution}
+        />
+      )}
     </main>
   );
+}
+
+function readPreferredSurface(): SurfaceType {
+  const value = window.localStorage.getItem(preferredSurfaceStorageKey);
+  return value === "agent" ? "agent" : "chat";
+}
+
+function writePreferredSurface(surfaceType: SurfaceType) {
+  if (surfaceType === "chat" || surfaceType === "agent") {
+    window.localStorage.setItem(preferredSurfaceStorageKey, surfaceType);
+  }
 }

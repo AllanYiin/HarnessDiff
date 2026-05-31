@@ -1,5 +1,7 @@
 export type ProfileId = string;
 
+export type SurfaceType = "chat" | "workflow" | "agent" | "multi_agents";
+
 export type InputMode = "integrated" | "independent";
 
 export type HarnessModuleId =
@@ -11,7 +13,8 @@ export type HarnessModuleId =
   | "tool_policy"
   | "memory_selection"
   | "post_answer_critique"
-  | "token_budgeter";
+  | "token_budgeter"
+  | "consequence_gate";
 
 export type HarnessModules = Record<HarnessModuleId, boolean>;
 
@@ -71,6 +74,7 @@ export type SkillInvocationTrace = {
   status?: string;
   sequence?: number;
   token_usage?: TokenUsageTrace;
+  metadata?: Record<string, unknown>;
 };
 
 export type AttachmentPreview = {
@@ -101,4 +105,29 @@ export type ProfileState = {
   messages: Message[];
   draft: string;
   streaming: boolean;
+};
+
+export type AgentRunConfig = {
+  type: "agent";
+  objective: string;
+  context?: string;
+  max_steps?: number;
+  allow_subagents?: boolean;
+  allow_container_tools?: boolean;
+};
+
+export type AgentStepTrace = {
+  id: string;
+  profile_id: ProfileId;
+  profile_label?: string;
+  step_id: string;
+  sequence: number;
+  type: string;
+  label: string;
+  status: "running" | "completed" | "error" | "cancelled" | "skipped";
+  tool_name?: string | null;
+  subagent_id?: string | null;
+  subagent_label?: string | null;
+  elapsed_ms?: number | null;
+  token_usage?: TokenUsageTrace;
 };

@@ -32,19 +32,20 @@ node node_modules\@playwright\test\cli.js install chromium
 node node_modules\@playwright\test\cli.js test
 ```
 
-Expected regression coverage includes provider failures, invalid run ids, lazy analysis rebuilds, Harness settings disclosure, no horizontal overflow, composer visibility, pane visibility, and streamed `analysis_ready` rendering.
+Expected regression coverage includes provider failures, invalid run ids, lazy analysis rebuilds, Harness settings disclosure, no horizontal overflow, composer visibility, pane visibility, streamed `analysis_ready` rendering, Agent surface switching, Agent step trace persistence, and Harness-only access to shell/container/code/subagent/parallel tools.
 
 ## Release Notes Draft
 
-For the first Chat MVP release, include:
+For the current local release, include:
 
 - dual-pane Harness vs NoHarness Chat workbench
+- dual-pane NoHarness Agent vs Harness Agent foreground runtime
 - OpenAI Responses API streaming
 - OpenAI Responses API vision input for supported image attachments
 - per-run Harness module toggles
-- local JSON artifacts for project/run/input/output/events/usage/analysis
+- local JSON artifacts for project/run/input/output/events/usage/steps/subagents/analysis
 - deterministic current and cumulative token/context analysis
-- known limitations: Chat surface only, no non-image binary provider upload, stored history not yet replayed into provider context
+- known limitations: Agent mode is foreground streaming only, no durable background resume/checkpointing, no non-image binary provider upload, stored history not yet replayed into provider context
 
 ## Tagging
 

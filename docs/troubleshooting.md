@@ -131,6 +131,23 @@ Remediation: inspect the pane `events.jsonl` and provider error, then rerun.
 
 Verify: the next successful run should end with `analysis_ready` and `run_completed`.
 
+## Agent Run Has Partial Output Only
+
+Symptoms: Agent mode shows partial final text or partial trace and no full comparison summary.
+
+Diagnosis: the foreground stream was cancelled, the browser request was aborted, or one agent profile failed before both profiles completed.
+
+Expected behavior:
+
+- `run.json` is marked `cancelled` or `failed`
+- profile `events.jsonl` and Agent `steps.jsonl` keep events that happened before the stop
+- completed Agent runs write `analysis/agent-analysis.json`
+- failed or cancelled Agent runs do not present a full deterministic comparison as if both sides completed
+
+Remediation: inspect `baseline_agent/steps.jsonl`, `harness_agent/steps.jsonl`, and the matching `events.jsonl` files. If the stop was user-initiated, start a new Agent task. If a provider/tool error caused the stop, fix the failing tool/runtime condition and rerun.
+
+Limit: Agent mode is foreground streaming in this release. It does not resume a cancelled run after browser reload or backend restart.
+
 ## Horizontal Overflow In UI Tests
 
 Symptoms: Playwright fails the overflow assertion.

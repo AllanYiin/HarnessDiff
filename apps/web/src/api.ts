@@ -1,9 +1,11 @@
 import type {
   HarnessModules,
   InputMode,
+  AgentStepTrace,
   MessageAttachment,
   ProfileId,
   ProfileInstance,
+  SurfaceType,
   ToolCallTrace,
   VisionAttachmentInput
 } from "./types";
@@ -11,6 +13,7 @@ import type {
 type Project = {
   id: string;
   name: string;
+  surface_type: SurfaceType;
   created_at: string;
   updated_at: string;
 };
@@ -27,7 +30,7 @@ export type TranscriptRun = {
   input_mode: InputMode;
   status: string;
   attachments: MessageAttachment[];
-  profiles: Array<ProfileInstance & { output_text: string }>;
+  profiles: Array<ProfileInstance & { output_text: string; steps: AgentStepTrace[] }>;
 };
 
 export type ProjectTranscript = {
@@ -45,6 +48,9 @@ export type RunStreamEvent = {
     | "completed"
     | "error"
     | "tool_call"
+    | "agent_step_started"
+    | "agent_step_completed"
+    | "agent_step_error"
     | "skill_invocation"
     | "analysis_ready"
     | "run_completed"
@@ -52,10 +58,12 @@ export type RunStreamEvent = {
   text?: string | null;
   message?: string;
   tool_call?: Omit<ToolCallTrace, "id">;
+  agent_step?: Omit<AgentStepTrace, "id">;
   skill_id?: string;
   status?: string;
   sequence?: number;
   token_usage?: ToolCallTrace["token_usage"];
+  metadata?: Record<string, unknown>;
   usage?: unknown;
   analysis?: AnalysisDocument;
 };
@@ -78,6 +86,17 @@ export type ContextSection = {
   notes: string;
 };
 
+export type HarnessDecisionTrace = {
+  event_type?: string;
+  event_id?: string;
+  decision_id?: string;
+  rule_id?: string | null;
+  effect?: string;
+  reason?: Record<string, unknown>;
+  telemetry?: Record<string, unknown>;
+  contributing_decisions?: HarnessDecisionTrace[];
+};
+
 export type ProfileAnalysis = {
   profile_id: ProfileId;
   profile_label: string;
@@ -86,7 +105,7 @@ export type ProfileAnalysis = {
   context_sections: ContextSection[];
   output_characters: number;
   enabled_harness_modules: string[];
-  harness_decisions: Record<string, unknown>[];
+  harness_decisions: HarnessDecisionTrace[];
   provider_context_keys: string[];
 };
 
@@ -184,9 +203,17 @@ function normalizeProject(value: unknown, fallbackName: string): Project {
   return {
     id: value.id,
     name: asString(value.name, fallbackName),
+    surface_type: normalizeSurfaceType(value.surface_type),
     created_at: asString(value.created_at, now),
     updated_at: asString(value.updated_at, now)
   };
+}
+
+function normalizeSurfaceType(value: unknown): SurfaceType {
+  if (value === "agent" || value === "workflow" || value === "multi_agents") {
+    return value;
+  }
+  return "chat";
 }
 
 function normalizeTranscriptRun(value: unknown): TranscriptRun | null {
@@ -200,7 +227,8 @@ function normalizeTranscriptRun(value: unknown): TranscriptRun | null {
           id: profile.id,
           label: asString(profile.label, profile.id),
           harness_modules: normalizeHarnessModules(profile.harness_modules),
-          output_text: asString(profile.output_text)
+          output_text: asString(profile.output_text),
+          steps: normalizeAgentSteps(profile.steps)
         }];
       })
     : [];
@@ -212,6 +240,52 @@ function normalizeTranscriptRun(value: unknown): TranscriptRun | null {
     attachments: normalizeTranscriptAttachments(value.attachments),
     profiles
   };
+}
+
+function normalizeAgentSteps(value: unknown): AgentStepTrace[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((step, index) => {
+    if (!isRecord(step) || typeof step.profile_id !== "string" || typeof step.step_id !== "string") {
+      return [];
+    }
+    const sequence = typeof step.sequence === "number" ? step.sequence : index;
+    const type = asString(step.type, "agent_step_completed");
+    const status = normalizeAgentStepStatus(step.status);
+    return [
+      {
+        id: `${step.step_id}_${type}_${sequence}`,
+        profile_id: step.profile_id,
+        profile_label: asString(step.profile_label),
+        step_id: step.step_id,
+        sequence,
+        type,
+        label: asString(step.label, step.step_id),
+        status,
+        tool_name: typeof step.tool_name === "string" ? step.tool_name : null,
+        subagent_id: typeof step.subagent_id === "string" ? step.subagent_id : null,
+        subagent_label: typeof step.subagent_label === "string" ? step.subagent_label : null,
+        elapsed_ms: typeof step.elapsed_ms === "number" ? step.elapsed_ms : null,
+        token_usage: isRecord(step.token_usage)
+          ? (step.token_usage as AgentStepTrace["token_usage"])
+          : undefined
+      }
+    ];
+  });
+}
+
+function normalizeAgentStepStatus(value: unknown): AgentStepTrace["status"] {
+  if (
+    value === "running" ||
+    value === "completed" ||
+    value === "error" ||
+    value === "cancelled" ||
+    value === "skipped"
+  ) {
+    return value;
+  }
+  return "completed";
 }
 
 function normalizeTranscriptAttachments(value: unknown): MessageAttachment[] {
@@ -241,11 +315,11 @@ function normalizeTranscriptAttachments(value: unknown): MessageAttachment[] {
   });
 }
 
-export async function createProject(name: string): Promise<Project> {
+export async function createProject(name: string, surfaceType: SurfaceType = "chat"): Promise<Project> {
   const response = await fetch("/api/projects", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name })
+    body: JSON.stringify({ name, surface_type: surfaceType })
   });
   if (!response.ok) {
     throw new Error(`Failed to create project: ${response.status}`);
@@ -310,6 +384,7 @@ export async function createRun(params: {
   reasoningEffort: string;
   profiles: ProfileInstance[];
   attachments?: VisionAttachmentInput[];
+  surfacePayload?: Record<string, unknown> | null;
 }): Promise<Run> {
   const response = await fetch(`/api/projects/${params.projectId}/runs`, {
     method: "POST",
@@ -320,7 +395,8 @@ export async function createRun(params: {
       model: params.model,
       reasoning_effort: params.reasoningEffort,
       profiles: params.profiles,
-      attachments: params.attachments ?? []
+      attachments: params.attachments ?? [],
+      surface_payload: params.surfacePayload ?? null
     })
   });
   if (!response.ok) {

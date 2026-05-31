@@ -12,7 +12,16 @@ from pydantic import ValidationError
 from app.core.settings import settings
 from app.models.harness_modules import normalize_harness_modules
 from app.models.project import ProjectCreate, ProjectDocument, ProjectUpdate, utc_now_iso
-from app.models.run import ProfileConfig, RunCreate, RunDocument, RunStatus, new_run_document
+from app.models.agent import AgentRunConfig, AgentStepEvent
+from app.models.project import SurfaceType
+from app.models.run import (
+    ProfileConfig,
+    RunCreate,
+    RunDocument,
+    RunStatus,
+    default_agent_profiles,
+    new_run_document,
+)
 from app.providers.base import LLMImageAttachment
 from app.providers.base import ProviderEvent
 from app.storage.errors import InvalidProjectIdError, ProjectNotFoundError, StorageCorruptionError
@@ -84,10 +93,14 @@ class ProjectStore:
         shutil.rmtree(project_dir)
 
     def create_run(self, project_id: str, payload: RunCreate) -> RunDocument:
-        self._read_project_document(project_id)
+        project = self._read_project_document(project_id)
+        if project.surface_type == SurfaceType.agent and payload.surface_payload is None:
+            payload = payload.model_copy(
+                update={"surface_payload": AgentRunConfig(objective=payload.prompt)}
+            )
         runs_dir = self._project_dir(project_id) / "runs"
         runs_dir.mkdir(parents=True, exist_ok=True)
-        profiles = self._effective_profiles(project_id, payload)
+        profiles = self._effective_profiles(project, payload)
         run = new_run_document(
             schema_version=settings.schema_version,
             run_id=self._new_run_id(runs_dir),
@@ -166,12 +179,39 @@ class ProjectStore:
         analysis_dir.mkdir(parents=True, exist_ok=True)
         write_json_atomic(analysis_dir / "analysis.json", analysis)
 
+    def write_agent_analysis(self, project_id: str, run_id: str, analysis: dict[str, Any]) -> None:
+        analysis_dir = self._run_dir(project_id, run_id) / "analysis"
+        analysis_dir.mkdir(parents=True, exist_ok=True)
+        write_json_atomic(analysis_dir / "agent-analysis.json", analysis)
+
     def read_run_analysis(self, project_id: str, run_id: str) -> dict[str, Any]:
         analysis_path = self._run_dir(project_id, run_id) / "analysis" / "analysis.json"
         if not analysis_path.exists():
             raise ProjectNotFoundError(run_id)
         data = read_json(analysis_path)
         return data if isinstance(data, dict) else {}
+
+    def read_agent_analysis(self, project_id: str, run_id: str) -> dict[str, Any]:
+        analysis_path = self._run_dir(project_id, run_id) / "analysis" / "agent-analysis.json"
+        if not analysis_path.exists():
+            raise ProjectNotFoundError(run_id)
+        data = read_json(analysis_path)
+        return data if isinstance(data, dict) else {}
+
+    def read_agent_steps(self, project_id: str, run_id: str, profile_id: str) -> list[dict[str, Any]]:
+        path = self._run_dir(project_id, run_id) / profile_id / "steps.jsonl"
+        if not path.exists():
+            return []
+        rows: list[dict[str, Any]] = []
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(item, dict):
+                    rows.append(item)
+        return rows
 
     def update_run_status(self, project_id: str, run_id: str, status: RunStatus) -> RunDocument:
         run_dir = self._run_dir(project_id, run_id)
@@ -280,6 +320,7 @@ class ProjectStore:
         sequence: int,
         skill_id: str,
         token_usage: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         self._append_jsonl(
             self._run_dir(project_id, run_id) / profile_id / "events.jsonl",
@@ -290,6 +331,7 @@ class ProjectStore:
                 "sequence": sequence,
                 "skill_id": skill_id,
                 "token_usage": token_usage or {},
+                "metadata": metadata or {},
                 "created_at": utc_now_iso(),
             },
         )
@@ -304,6 +346,14 @@ class ProjectStore:
                 **error_payload,
                 "created_at": utc_now_iso(),
             },
+        )
+
+    def append_agent_step_event(
+        self, project_id: str, run_id: str, profile_id: str, event: AgentStepEvent
+    ) -> None:
+        self._append_jsonl(
+            self._run_dir(project_id, run_id) / profile_id / "steps.jsonl",
+            event.model_dump(mode="json"),
         )
 
     def prepare_subagent_run(
@@ -569,6 +619,7 @@ class ProjectStore:
                 "memory_selection": {"enabled": True},
                 "post_answer_critique": {"enabled": True},
                 "token_budgeter": {"enabled": True},
+                "consequence_gate": {"enabled": True},
             },
         }
 
@@ -589,5 +640,10 @@ class ProjectStore:
             modules.update({name: bool(enabled) for name, enabled in overrides.items()})
         return normalize_harness_modules(modules)
 
-    def _effective_profiles(self, project_id: str, payload: RunCreate) -> list[ProfileConfig]:
+    def _effective_profiles(self, project: ProjectDocument, payload: RunCreate) -> list[ProfileConfig]:
+        if (
+            project.surface_type == SurfaceType.agent
+            and [profile.id for profile in payload.profiles] == ["baseline", "harness"]
+        ):
+            return default_agent_profiles()
         return list(payload.profiles)

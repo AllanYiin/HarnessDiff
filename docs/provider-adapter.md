@@ -15,6 +15,9 @@ The route layer should consume provider-neutral events:
 - `created`
 - `delta`
 - `tool_call`
+- `agent_step_started`
+- `agent_step_completed`
+- `agent_step_error`
 - `completed`
 - `error`
 
@@ -26,7 +29,7 @@ The OpenAI provider stage must use Responses API streaming and handle semantic e
 
 When a run includes supported image attachments, the provider sends the current user turn as Responses message content containing one `input_text` item followed by `input_image` items using data URLs. Non-image attachments remain represented in prompt text until server-side binary file extraction is implemented.
 
-When `LLMRequest.tools_enabled` is true, the OpenAI provider also sends the HarnessDiff chat tool schema, handles `function_call` output items, executes the requested tool through the local tool runtime, appends `function_call_output`, and resumes the Responses request until the model returns a final non-tool response or the tool round limit is reached. The default tool round limit is 16 and can be overridden with `HARNESSDIFF_MAX_TOOL_ROUNDS`. Harness profiles with `tool_policy` receive the full tool set: standard web/fs/data tools, `standard.shell.bash`, `standard.code.container_exec`, `harness.subagent.run`, and `multi_tool_use.parallel`; the Harness tool schema places `standard.shell.bash` first and the container code tool second. NoHarness profiles receive the standard web/fs/data tools but omit `standard.shell.bash`, `standard.code.container_exec`, `harness.subagent.run`, and `multi_tool_use.parallel`.
+When `LLMRequest.tools_enabled` is true, the OpenAI provider also sends the HarnessDiff chat/agent tool schema, handles `function_call` output items, executes the requested tool through the local tool runtime, appends `function_call_output`, and resumes the Responses request until the model returns a final non-tool response or the tool round limit is reached. The default tool round limit is 16 and can be overridden with `HARNESSDIFF_MAX_TOOL_ROUNDS`. Harness profiles and `Harness Agent` with `tool_policy` receive the full tool set: standard web/fs/data tools, `standard.shell.bash`, `standard.code.container_exec`, `harness.subagent.run`, and `multi_tool_use.parallel`; the Harness tool schema places `standard.shell.bash` first and the container code tool second. `NoHarness` and `NoHarness Agent` profiles receive the standard web/fs/data tools but omit `standard.shell.bash`, `standard.code.container_exec`, `harness.subagent.run`, and `multi_tool_use.parallel`.
 
 `standard.code.container_exec` runs Python, Node.js, pnpm, React/Vite, tests, and build commands inside a Docker container using a temporary copy of the repository. It runs with `--network none` by default, CPU/memory/pid limits, and no project `.env` or API key environment variables. The original workspace is not mounted writable; command results return as normal tool output with stdout, stderr, exit code, elapsed time, image name, and truncation status.
 
@@ -114,6 +117,20 @@ Stage 6 adds automated regression coverage for:
 - single-pane analysis without misleading cross-pane deltas;
 - frontend Harness settings disclosure without horizontal overflow;
 - frontend `analysis_ready` SSE rendering in desktop and mobile Playwright projects.
+
+## Agent Runtime Boundary
+
+Agent projects are selected by `project.surface_type == "agent"` and are routed to `AgentRunOrchestrator`. The provider adapter boundary remains unchanged: provider-specific OpenAI events still become provider-neutral `ProviderEvent` rows before the orchestrator writes artifacts or emits SSE.
+
+Agent mode adds app-level SSE events for trace display:
+
+- `agent_step_started`
+- `agent_step_completed`
+- `agent_step_error`
+
+These events are derived from local orchestration/tool events and persisted to `{profile_id}/steps.jsonl`. Final answer text still arrives through normal `delta` events. The first Agent release is foreground-only: aborting the browser request cancels the active stream and preserves partial artifacts, but it does not support durable background resume or checkpoint replay.
+
+After a completed Agent run, the deterministic Agent analysis builder reads `run.json`, profile input/output/usage/events/steps, and subagent artifacts, then writes `analysis/agent-analysis.json`. It does not call an LLM.
 
 ## Non-goals in Stage 0
 
