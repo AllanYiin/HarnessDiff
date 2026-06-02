@@ -1,8 +1,14 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 
-from app.models.skill import SkillImportRequest, SkillImportResponse, SkillListResponse
+from app.models.skill import (
+    SkillImportRequest,
+    SkillImportResponse,
+    SkillListResponse,
+    SkillSummary,
+    SkillUpdateRequest,
+)
 from app.services.skill_store import SkillImportError, SkillStore
 
 router = APIRouter(prefix="/skills", tags=["skills"])
@@ -19,7 +25,7 @@ async def list_skills(request: Request) -> SkillListResponse:
     return SkillListResponse(
         home_dir=str(store.home_dir),
         skills_dir=str(store.skills_dir),
-        skills=store.list_skills(),
+        skills=store.list_skills(include_disabled=True),
     )
 
 
@@ -49,3 +55,25 @@ async def import_skill(request: Request, payload: SkillImportRequest) -> SkillIm
     except SkillImportError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
 
+
+@router.patch("/{skill_id}", response_model=SkillSummary)
+async def update_skill(
+    request: Request, skill_id: str, payload: SkillUpdateRequest
+) -> SkillSummary:
+    try:
+        return get_skill_store(request).update_skill_enabled(skill_id, payload.enabled)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Skill not found") from None
+    except SkillImportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
+@router.delete("/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_skill(request: Request, skill_id: str) -> Response:
+    try:
+        get_skill_store(request).delete_skill(skill_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Skill not found") from None
+    except SkillImportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

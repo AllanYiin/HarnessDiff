@@ -9,6 +9,9 @@ const skills: SkillSummary[] = [
     name: "longdoc-evidence-reader",
     description: "Read long docs",
     version: "",
+    enabled: true,
+    can_toggle: true,
+    can_delete: false,
     path: ""
   },
   {
@@ -16,6 +19,9 @@ const skills: SkillSummary[] = [
     name: "Skill Creator",
     description: "Create skills",
     version: "",
+    enabled: true,
+    can_toggle: true,
+    can_delete: false,
     path: ""
   }
 ];
@@ -36,6 +42,14 @@ describe("skill slash commands", () => {
     ]);
   });
 
+  it("ignores disabled skills in slash commands", () => {
+    expect(
+      parseSkillCommandIds("/skill-creator", [
+        { ...skills[1], enabled: false }
+      ])
+    ).toEqual([]);
+  });
+
   it("formats full skill content as deferred prompt context", () => {
     const details: SkillDetail[] = [
       { id: "skill-creator", path: "/tmp/SKILL.md", content: "# Skill\n```bad```" }
@@ -48,4 +62,3 @@ describe("skill slash commands", () => {
     expect(block).toContain("`\u200b``bad`\u200b``");
   });
 });
-

@@ -6,6 +6,10 @@ openai>=1.82.0
 pydantic>=2.0.0
 PyYAML>=6.0
 jsonschema>=4.23
+pypdf>=6.1.0
 
 --find-links vendor/wheels
 toolanything==0.5.0
+
+# Auto-added by project_launcher.py (missing imports)
+pymupdf

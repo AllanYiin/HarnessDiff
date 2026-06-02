@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 
+from app.models.run import RunAttachment
+from app.services.pdf_attachments import (
+    PdfAttachmentToolRuntime,
+    build_pdf_context_prompt,
+    prepare_pdf_attachments,
+)
 from app.services.tool_runtime import ALLOWED_TOOL_NAMES, ToolAnythingRuntime
 
 
@@ -187,3 +194,102 @@ def test_tool_runtime_web_search_without_provider_returns_structured_error(
 
     assert result.ok is False
     assert "SERPAPI_KEY" in result.error["message"]
+
+
+def test_pdf_attachment_tools_support_grep_and_progressive_blocks(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    attachments = prepare_pdf_attachments(
+        [
+            RunAttachment(
+                kind="pdf",
+                id="pdf_test",
+                name="paper.pdf",
+                mime_type="application/pdf",
+                size_bytes=len(_minimal_pdf_bytes()),
+                data_base64=base64.b64encode(_minimal_pdf_bytes()).decode("ascii"),
+            )
+        ],
+        run_dir=run_dir,
+    )
+    attachment = attachments[0]
+
+    no_harness_prompt = build_pdf_context_prompt(
+        attachments=tuple(attachments),
+        run_dir=run_dir,
+        harness_mode=False,
+    )
+    assert "reading_mode: full_text_below_threshold" in no_harness_prompt
+    assert "HarnessDiff PDF needle" in no_harness_prompt
+
+    grep_runtime = PdfAttachmentToolRuntime(
+        run_dir=run_dir,
+        attachments=tuple(attachments),
+        mode="grep",
+    )
+    grep_result = asyncio.run(
+        grep_runtime.invoke_openai_tool(
+            "attachment_pdf_grep",
+            {"pattern": "needle", "regex": False, "attachment_id": "pdf_test"},
+        )
+    )
+    assert grep_result.ok is True
+    assert grep_result.result["matches"][0]["page_number"] == 1
+    assert "HarnessDiff PDF needle" in grep_result.result["matches"][0]["line"]
+
+    harness_prompt = build_pdf_context_prompt(
+        attachments=tuple(attachments),
+        run_dir=run_dir,
+        harness_mode=True,
+    )
+    assert "reading_mode: progressive_blocks" in harness_prompt
+    assert "attachment_pdf_search_blocks" in harness_prompt
+
+    block_runtime = PdfAttachmentToolRuntime(
+        run_dir=run_dir,
+        attachments=tuple(attachments),
+        mode="harness",
+    )
+    search_result = asyncio.run(
+        block_runtime.invoke_openai_tool(
+            "attachment_pdf_search_blocks",
+            {"query": "needle", "attachment_id": attachment.id},
+        )
+    )
+    assert search_result.ok is True
+    block_id = search_result.result["results"][0]["id"]
+    read_result = asyncio.run(
+        block_runtime.invoke_openai_tool(
+            "attachment_pdf_read_block",
+            {"block_id": block_id, "attachment_id": attachment.id},
+        )
+    )
+    assert read_result.ok is True
+    assert read_result.result["page_refs"] == [1]
+    assert "HarnessDiff PDF needle" in read_result.result["content"]
+
+
+def _minimal_pdf_bytes() -> bytes:
+    return (
+        b"%PDF-1.4\n"
+        b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
+        b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n"
+        b"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj\n"
+        b"4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n"
+        b"5 0 obj << /Length 53 >> stream\n"
+        b"BT /F1 12 Tf 72 720 Td (HarnessDiff PDF needle) Tj ET\n"
+        b"endstream endobj\n"
+        b"xref\n"
+        b"0 6\n"
+        b"0000000000 65535 f \n"
+        b"0000000009 00000 n \n"
+        b"0000000058 00000 n \n"
+        b"0000000115 00000 n \n"
+        b"0000000241 00000 n \n"
+        b"0000000311 00000 n \n"
+        b"trailer << /Root 1 0 R /Size 6 >>\n"
+        b"startxref\n"
+        b"405\n"
+        b"%%EOF"
+    )

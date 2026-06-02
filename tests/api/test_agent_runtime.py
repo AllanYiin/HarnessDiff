@@ -71,6 +71,8 @@ class ToolCallingAgentProvider(FakeAgentProvider):
                     "ok": True,
                     "tool_name": "harness.subagent.run",
                     "openai_name": "harness_subagent_run",
+                    "arguments": {"subagent_id": "researcher", "task": "Delegate research"},
+                    "result_summary": "{\"output\":\"research notes\"}",
                     "elapsed_ms": 25,
                     "subagent_id": "researcher",
                     "subagent_label": "Researcher",
@@ -226,6 +228,72 @@ def test_agent_project_uses_agent_profiles_and_streams_steps(tmp_path) -> None:
     assert baseline_output["text"] == "NoHarness Agent: Inspect the repository"
 
 
+def test_harness_agent_reads_harnessdiff_agents_md(tmp_path) -> None:
+    provider = FakeAgentProvider()
+    home = tmp_path / ".harnessdiff"
+    home.mkdir()
+    (home / "AGENTS.md").write_text(
+        "# Local instructions\nHarness Agent sentinel instruction.",
+        encoding="utf-8",
+    )
+    client = TestClient(create_app(data_dir=tmp_path, harnessdiff_home=home, llm_provider=provider))
+    project_id = client.post(
+        "/api/projects", json={"name": "Agent", "surface_type": "agent"}
+    ).json()["id"]
+    run = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "Inspect the repository",
+            "input_mode": "integrated",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+        },
+    ).json()
+
+    with client.stream("GET", f"/api/runs/{run['id']}/stream") as response:
+        assert response.status_code == 200
+        _sse_events("".join(response.iter_text()))
+
+    requests = {request.profile_id: request for request in provider.requests}
+    assert "Harness Agent sentinel instruction." not in requests["baseline_agent"].instructions
+    assert "Harness Agent sentinel instruction." in requests["harness_agent"].instructions
+
+
+def test_agent_explicit_skill_invocation_loads_skill_context(tmp_path) -> None:
+    provider = FakeAgentProvider()
+    home = tmp_path / ".harnessdiff"
+    skill_dir = home / "skills" / "demo-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: demo-skill\ndescription: Demo agent skill.\n---\n"
+        "# Demo Skill\n\nApply the demo skill sentinel workflow.",
+        encoding="utf-8",
+    )
+    client = TestClient(create_app(data_dir=tmp_path, harnessdiff_home=home, llm_provider=provider))
+    project_id = client.post(
+        "/api/projects", json={"name": "Agent skill", "surface_type": "agent"}
+    ).json()["id"]
+    run = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "$demo-skill inspect the repository",
+            "input_mode": "integrated",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+        },
+    ).json()
+
+    with client.stream("GET", f"/api/runs/{run['id']}/stream") as response:
+        assert response.status_code == 200
+        events = _sse_events("".join(response.iter_text()))
+
+    assert any(event["type"] == "skill_invocation" for event in events)
+    assert all(
+        "Apply the demo skill sentinel workflow." in request.instructions
+        for request in provider.requests
+    )
+
+
 def test_agent_tool_policy_keeps_high_risk_tools_harness_only(tmp_path) -> None:
     provider = FakeAgentProvider()
     client = TestClient(
@@ -351,3 +419,5 @@ def test_agent_analysis_artifact_and_transcript_steps_are_traceable(tmp_path) ->
         if profile["id"] == "harness_agent"
     )
     assert any(step["tool_name"] == "harness.subagent.run" for step in harness_profile["steps"])
+    assert harness_profile["tool_calls"][0]["arguments"]["subagent_id"] == "researcher"
+    assert "research notes" in harness_profile["tool_calls"][0]["result_summary"]

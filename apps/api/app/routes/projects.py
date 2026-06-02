@@ -59,9 +59,15 @@ async def get_project_transcript(request: Request, project_id: str) -> dict:
                         "steps": store.read_agent_steps(project_id, run.id, profile.id)
                         if project.surface_type == "agent"
                         else [],
+                        "tool_calls": store.read_profile_tool_calls(
+                            project_id, run.id, profile.id
+                        ),
+                        "skill_invocations": store.read_profile_skill_invocations(
+                            project_id, run.id, profile.id
+                        ),
                     }
                 )
-            runs.append({**run.model_dump(mode="json"), "profiles": profiles})
+            runs.append({**run.model_dump(mode="json", exclude_none=True), "profiles": profiles})
         return {"project": project.model_dump(mode="json"), "runs": runs}
     except ProjectNotFoundError:
         raise HTTPException(status_code=404, detail="Project not found") from None

@@ -12,6 +12,9 @@ import {
   createProject,
   createRun,
   createSubagent,
+  deleteSubagent,
+  deleteSkill,
+  deleteTool,
   getProjectTranscript,
   getSkill,
   importSkillFile,
@@ -19,16 +22,21 @@ import {
   listSkills,
   listProjects,
   listSubagents,
+  listTools,
   streamRun,
+  updateSubagentEnabled,
+  updateSkillEnabled,
+  updateToolEnabled,
   updateProjectName,
   type AnalysisDocument,
   type ProjectSummary,
   type RunStreamEvent,
   type SubagentCreatePayload,
   type SubagentSummary,
-  type SkillSummary
+  type SkillSummary,
+  type ToolSummary
 } from "./api";
-import { attachmentPromptBlock, attachmentVisionInputs, ingestFiles } from "./domain/fileIngestion";
+import { attachmentPromptBlock, attachmentRunInputs, ingestFiles } from "./domain/fileIngestion";
 import { nextInputModeAfterCompletedTurn } from "./domain/inputMode";
 import { parseSkillCommandIds, skillDetailsPromptBlock } from "./domain/skillCommands";
 import {
@@ -49,7 +57,7 @@ import type {
   ProfileInstance,
   ProfileState,
   SurfaceType,
-  VisionAttachmentInput
+  RunAttachmentInput
 } from "./types";
 
 const newConversationName = "新對話";
@@ -147,6 +155,8 @@ export function App() {
   const [subagents, setSubagents] = useState<SubagentSummary[]>([]);
   const [subagentsLoading, setSubagentsLoading] = useState(false);
   const [creatingSubagent, setCreatingSubagent] = useState(false);
+  const [tools, setTools] = useState<ToolSummary[]>([]);
+  const [toolsLoading, setToolsLoading] = useState(false);
   const [profiles, setProfiles] = useState<ProfileInstance[]>(() => profilesForSurface(readPreferredSurface()));
   const [analysis, setAnalysis] = useState<AnalysisDocument | null>(null);
   const [integratedDraft, setIntegratedDraft] = useState("");
@@ -183,6 +193,10 @@ export function App() {
       (profiles.find((profile) => profile.id === configurableHarnessProfileId)?.harness_modules ??
         {}) as HarnessModules,
     [configurableHarnessProfileId, profiles]
+  );
+  const enabledSkills = useMemo(
+    () => skills.filter((skill) => skill.enabled),
+    [skills]
   );
 
   function updateProfileState(profileId: ProfileId, next: (current: ProfileState) => ProfileState) {
@@ -236,6 +250,20 @@ export function App() {
     }
   }
 
+  async function refreshTools() {
+    setToolsLoading(true);
+    try {
+      const response = await listTools();
+      setTools(response.tools);
+      return response.tools;
+    } catch (error) {
+      setSkillError(errorMessage(error));
+      return [];
+    } finally {
+      setToolsLoading(false);
+    }
+  }
+
   useEffect(() => {
     let ignore = false;
     refreshProjects().then((loadedProjects) => {
@@ -250,6 +278,7 @@ export function App() {
     });
     refreshSkills();
     refreshSubagents();
+    refreshTools();
 
     return () => {
       ignore = true;
@@ -303,6 +332,7 @@ export function App() {
     resetConversationState(null);
     refreshSkills();
     refreshSubagents();
+    refreshTools();
     try {
       const project = await createProject(newConversationName, surfaceType);
       setProjectId(project.id);
@@ -376,6 +406,78 @@ export function App() {
     }
   }
 
+  async function handleToggleSubagent(subagentId: string, enabled: boolean) {
+    setSkillError("");
+    try {
+      const updated = await updateSubagentEnabled(subagentId, enabled);
+      setSubagents((current) =>
+        current.map((subagent) =>
+          subagent.id === updated.id ? { ...subagent, ...updated } : subagent
+        )
+      );
+    } catch (error) {
+      setSkillError(errorMessage(error));
+    }
+  }
+
+  async function handleDeleteSubagent(subagentId: string) {
+    setSkillError("");
+    try {
+      await deleteSubagent(subagentId);
+      setSubagents((current) => current.filter((subagent) => subagent.id !== subagentId));
+    } catch (error) {
+      setSkillError(errorMessage(error));
+    }
+  }
+
+  async function handleToggleSkill(skillId: string, enabled: boolean) {
+    setSkillError("");
+    try {
+      const updated = await updateSkillEnabled(skillId, enabled);
+      setSkills((current) =>
+        current.map((skill) => (skill.id === updated.id ? { ...skill, ...updated } : skill))
+      );
+    } catch (error) {
+      setSkillError(errorMessage(error));
+    }
+  }
+
+  async function handleDeleteSkill(skillId: string) {
+    setSkillError("");
+    try {
+      await deleteSkill(skillId);
+      setSkills((current) => current.filter((skill) => skill.id !== skillId));
+      if (selectedSkillId === skillId) {
+        setSelectedSkillId("");
+        setSelectedSkillContent("");
+      }
+    } catch (error) {
+      setSkillError(errorMessage(error));
+    }
+  }
+
+  async function handleToggleTool(toolId: string, enabled: boolean) {
+    setSkillError("");
+    try {
+      const updated = await updateToolEnabled(toolId, enabled);
+      setTools((current) =>
+        current.map((tool) => (tool.id === updated.id ? { ...tool, ...updated } : tool))
+      );
+    } catch (error) {
+      setSkillError(errorMessage(error));
+    }
+  }
+
+  async function handleDeleteTool(toolId: string) {
+    setSkillError("");
+    try {
+      await deleteTool(toolId);
+      setTools((current) => current.filter((tool) => tool.id !== toolId));
+    } catch (error) {
+      setSkillError(errorMessage(error));
+    }
+  }
+
   async function loadConversation(nextProjectId: string) {
     if (running) {
       pauseExecution();
@@ -402,7 +504,9 @@ export function App() {
             id: `${run.id}_${profile.id}_assistant`,
             role: "assistant",
             text: profile.output_text || (run.status === "cancelled" ? "已暫停。" : ""),
-            status: "done"
+            status: "done",
+            toolCalls: profile.tool_calls,
+            skillInvocations: profile.skill_invocations
           });
           nextProfileState[profile.id] = state;
           if (profile.steps.length > 0) {
@@ -613,7 +717,7 @@ export function App() {
     displayPrompt: string,
     targetProfileIds: ProfileId[],
     mode: InputMode,
-    visionAttachments: VisionAttachmentInput[],
+    runAttachments: RunAttachmentInput[],
     messageAttachments: MessageAttachment[],
     surfacePayload?: Record<string, unknown> | null
   ) {
@@ -639,7 +743,7 @@ export function App() {
         model,
         reasoningEffort,
         profiles: activeProfiles,
-        attachments: visionAttachments,
+        attachments: runAttachments,
         surfacePayload
       });
       await streamRun(
@@ -684,7 +788,7 @@ export function App() {
     }
     try {
       const prompt = await buildPromptWithContext(draft);
-      const visionAttachments = attachmentVisionInputs(attachments);
+      const runAttachments = attachmentRunInputs(attachments);
       const messageAttachments = messageAttachmentPreviews(attachments);
       setIntegratedDraft("");
       clearAttachments();
@@ -693,7 +797,7 @@ export function App() {
         draft,
         profiles.map((profile) => profile.id),
         "integrated",
-        visionAttachments,
+        runAttachments,
         messageAttachments
       );
     } catch (error) {
@@ -717,11 +821,11 @@ export function App() {
     }
     try {
       const prompt = await buildPromptWithContext(draft);
-      const visionAttachments = attachmentVisionInputs(attachments);
+      const runAttachments = attachmentRunInputs(attachments);
       const messageAttachments = messageAttachmentPreviews(attachments);
       updateProfileState(profileId, (current) => ({ ...current, draft: "" }));
       clearAttachments();
-      void submitWithApi(prompt, draft, [profileId], "independent", visionAttachments, messageAttachments);
+      void submitWithApi(prompt, draft, [profileId], "independent", runAttachments, messageAttachments);
     } catch (error) {
       setSkillError(errorMessage(error));
       setSkillsOpen(true);
@@ -735,7 +839,7 @@ export function App() {
     }
     try {
       const prompt = await buildPromptWithContext(draft);
-      const visionAttachments = attachmentVisionInputs(attachments);
+      const runAttachments = attachmentRunInputs(attachments);
       const messageAttachments = messageAttachmentPreviews(attachments);
       setIntegratedDraft("");
       clearAttachments();
@@ -745,7 +849,7 @@ export function App() {
         draft,
         profiles.map((profile) => profile.id),
         "integrated",
-        visionAttachments,
+        runAttachments,
         messageAttachments,
         {
           type: "agent",
@@ -795,7 +899,7 @@ export function App() {
 
   async function buildPromptWithContext(text: string) {
     const withAttachments = buildPromptWithAttachments(text);
-    const skillIds = parseSkillCommandIds(text, skills);
+    const skillIds = parseSkillCommandIds(text, enabledSkills);
     if (!skillIds.length) {
       return withAttachments;
     }
@@ -918,6 +1022,7 @@ export function App() {
           setHistoryOpen(false);
           refreshSkills();
           refreshSubagents();
+          refreshTools();
         }}
       />
       {historyOpen ? (
@@ -941,10 +1046,18 @@ export function App() {
           subagents={subagents}
           subagentsLoading={subagentsLoading}
           creatingSubagent={creatingSubagent}
+          tools={tools}
+          toolsLoading={toolsLoading}
           error={skillError}
           onImportFile={handleImportSkillFile}
           onImportFolder={handleImportSkillFolder}
           onSelectSkill={selectSkill}
+          onToggleSkill={handleToggleSkill}
+          onDeleteSkill={handleDeleteSkill}
+          onToggleSubagent={handleToggleSubagent}
+          onDeleteSubagent={handleDeleteSubagent}
+          onToggleTool={handleToggleTool}
+          onDeleteTool={handleDeleteTool}
           onCreateSubagent={handleCreateSubagent}
         />
       ) : null}
@@ -988,7 +1101,7 @@ export function App() {
           profileDrafts={Object.fromEntries(
             profiles.map((profile) => [profile.id, profileState[profile.id]?.draft ?? ""])
           )}
-          skills={skills}
+          skills={enabledSkills}
           attachments={attachments}
           disabled={running}
           profileDisabled={profileDisabled}

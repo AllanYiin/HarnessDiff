@@ -31,6 +31,9 @@ async def health(request: Request) -> dict[str, Any]:
         tool_names.append(SUBAGENT_TOOL_NAME)
     if tool_names and PARALLEL_TOOL_NAME not in tool_names:
         tool_names.append(PARALLEL_TOOL_NAME)
+    if skill_store is not None:
+        excluded = set(skill_store.disabled_or_deleted_tool_names())
+        tool_names = [tool_name for tool_name in tool_names if tool_name not in excluded]
     return {
         "status": "ok",
         "app": settings.app_name,

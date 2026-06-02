@@ -5,7 +5,9 @@
 - 以 localhost web app 形式提供 HarnessDiff Chat / Agent workbench。
 - 左側 `NoHarness` 使用 baseline instructions；右側 `Harness` 套用可開關 Harness modules。
 - 支援 OpenAI Responses API streaming。
-- 支援 PNG/JPEG/WEBP/GIF 圖片附件進入 OpenAI Responses API vision input；非圖片附件目前仍以 prompt metadata/文字摘要進入上下文。
+- 支援 PNG/JPEG/WEBP/GIF 圖片附件進入 OpenAI Responses API vision input。
+- 支援 PDF 附件本地文字抽取；短 PDF 在 NoHarness 以全文進入 prompt，長 PDF 在 NoHarness 以 grep/read_lines 逐行讀取，Harness 則採 Documa PDF chat-like 的 search_blocks -> read_block(s) progressive reading。
+- 其他非圖片附件目前仍以 prompt metadata/文字摘要進入上下文。
 - 前端與測試不得用假串流、route fixture 或 mock 成功回應掩蓋 backend/API/provider 契約失敗；測試替身只可用於隔離外部不可控依賴，且不得取代整合驗證。
 - 支援本機 JSON 保存 project/run/input/output/events/usage/analysis。
 - 支援 deterministic current-turn 與 cumulative token/context analysis。
@@ -34,7 +36,7 @@
 - input mode：`integrated` / `independent`
 - target panes：`NoHarness` / `Harness`
 - per-run `harness_modules`
-- supported image attachments
+- supported image and PDF attachments
 - installed skills first-layer context on a new conversation's first run
 
 輸出：
@@ -113,6 +115,7 @@ Deferred blocks:
 - Runtime data root: `data/projects`
 - Project config: `config/harness.default.json`
 - Run artifacts: `run.json`, `{pane}/input.json`, `{pane}/output.json`, `{pane}/events.jsonl`, `{pane}/usage.json`
+- PDF attachment artifacts: `attachments/{attachment_id}.txt`, `attachments/{attachment_id}.lines.txt`, `attachments/{attachment_id}.blocks.json` under each run directory
 - Analysis artifact: `analysis/analysis.json`
 - Agent trace artifacts: `{profile_id}/steps.jsonl`, `{profile_id}/subagents/{subagent_id}/...`, `analysis/agent-analysis.json`
 - Project metadata acts as conversation metadata; project name is auto-generated from the first prompt unless the user created an empty new conversation.

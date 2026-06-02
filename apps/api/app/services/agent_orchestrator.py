@@ -11,10 +11,11 @@ from app.models.agent import AgentStepEvent
 from app.models.project import utc_now_iso
 from app.models.run import RunDocument, RunStatus
 from app.providers.base import LLMImageAttachment, LLMRequest, ProviderEvent
-from app.services.chat_tool_runtime import ChatToolRuntime
+from app.services.chat_tool_runtime import ChatToolRuntime, PARALLEL_TOOL_NAME
 from app.services.container_code_runtime import CONTAINER_CODE_TOOL_NAME
 from app.services.context_builder import build_instructions
 from app.services.agent_analysis_builder import build_agent_run_analysis
+from app.services.pdf_attachments import PdfAttachmentToolRuntime, build_pdf_context_prompt
 from app.services.run_orchestrator import (
     NO_HARNESS_EXCLUDED_TOOL_NAMES,
     RunOrchestrator,
@@ -22,7 +23,7 @@ from app.services.run_orchestrator import (
     _prompt_cache_key,
 )
 from app.services.subagent_definitions import DEFAULT_SUBAGENTS
-from app.services.subagent_runtime import SubagentToolRuntime
+from app.services.subagent_runtime import SUBAGENT_TOOL_NAME, SubagentToolRuntime
 
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,7 @@ class AgentRunOrchestrator(RunOrchestrator):
         selected_skill_ids = tuple(skill.skill_id for skill in selected_skills)
         selected_skill_metadata = {skill.skill_id: skill.event_metadata() for skill in selected_skills}
         skill_token_usage = self._skill_token_usage(selected_skill_ids)
+        run_dir = self.store.get_run_dir(run.project_id, run.id)
 
         async def run_profile(profile) -> None:
             profile_started = time.perf_counter()
@@ -65,6 +67,12 @@ class AgentRunOrchestrator(RunOrchestrator):
                 has_harness_context = any(
                     bool(enabled) for enabled in profile.harness_modules.values()
                 )
+                pdf_context = build_pdf_context_prompt(
+                    attachments=tuple(run.attachments),
+                    run_dir=run_dir,
+                    harness_mode=has_harness_context,
+                )
+                profile_prompt = f"{run.prompt}{pdf_context}".strip()
                 if self.skill_store is not None:
                     if has_harness_context:
                         agents_context = self.skill_store.agents_context()
@@ -81,6 +89,19 @@ class AgentRunOrchestrator(RunOrchestrator):
                         instructions = f"{instructions}\n\n{auto_skill_context}"
 
                 has_full_tools = bool(profile.harness_modules.get("tool_policy", False))
+                globally_excluded_tools = (
+                    self.skill_store.disabled_or_deleted_tool_names()
+                    if self.skill_store is not None
+                    else ()
+                )
+                profile_excluded_tools = tuple(
+                    dict.fromkeys(
+                        (
+                            *globally_excluded_tools,
+                            *(() if has_full_tools else AGENT_BASELINE_EXCLUDED_TOOL_NAMES),
+                        )
+                    )
+                )
                 subagent_definitions = (
                     self.skill_store.subagent_definitions()
                     if self.skill_store is not None
@@ -96,12 +117,18 @@ class AgentRunOrchestrator(RunOrchestrator):
                             profile=profile,
                             definitions=subagent_definitions,
                             standard_runtime=self.tool_runtime,
+                            excluded_tool_names=profile_excluded_tools,
                         ),
-                        excluded_tool_names=()
-                        if has_full_tools
-                        else AGENT_BASELINE_EXCLUDED_TOOL_NAMES,
-                        include_subagent=has_full_tools,
-                        include_parallel=has_full_tools,
+                        excluded_tool_names=profile_excluded_tools,
+                        include_subagent=has_full_tools
+                        and SUBAGENT_TOOL_NAME not in globally_excluded_tools,
+                        include_parallel=has_full_tools
+                        and PARALLEL_TOOL_NAME not in globally_excluded_tools,
+                        pdf_runtime=PdfAttachmentToolRuntime(
+                            run_dir=run_dir,
+                            attachments=tuple(run.attachments),
+                            mode="harness" if has_harness_context else "grep",
+                        ),
                     )
                     if self.tool_runtime is not None
                     else None
@@ -128,7 +155,7 @@ class AgentRunOrchestrator(RunOrchestrator):
                     run.id,
                     profile.id,
                     profile.label,
-                    run.prompt,
+                    profile_prompt,
                     instructions,
                     profile.harness_modules,
                     (),
@@ -221,7 +248,7 @@ class AgentRunOrchestrator(RunOrchestrator):
                     model=run.model,
                     reasoning_effort=run.reasoning_effort,
                     instructions=instructions,
-                    prompt=run.prompt,
+                    prompt=profile_prompt,
                     image_attachments=image_attachments,
                     conversation_messages=(),
                     prompt_cache_key=prompt_cache_key,

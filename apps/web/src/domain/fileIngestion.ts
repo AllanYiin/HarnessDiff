@@ -1,4 +1,4 @@
-import type { AttachmentPreview, VisionAttachmentInput } from "../types";
+import type { AttachmentPreview, RunAttachmentInput, VisionAttachmentInput } from "../types";
 
 const maxTextCharacters = 24_000;
 const maxCsvRows = 40;
@@ -69,6 +69,35 @@ export function attachmentVisionInputs(attachments: AttachmentPreview[]): Vision
   });
 }
 
+export function attachmentRunInputs(attachments: AttachmentPreview[]): RunAttachmentInput[] {
+  return attachments.flatMap((attachment) => {
+    if (attachment.status !== "ready") {
+      return [];
+    }
+    if (attachment.runAttachment) {
+      return [attachment.runAttachment];
+    }
+    if (
+      attachment.kind === "image" &&
+      attachment.visionSupported &&
+      attachment.dataUrl
+    ) {
+      const mimeType = normalizedImageMime(attachment) ?? attachment.type;
+      return [
+        {
+          kind: "image",
+          name: attachment.name,
+          mime_type: mimeType,
+          size_bytes: attachment.size,
+          image_url: attachment.dataUrl,
+          detail: "auto"
+        }
+      ];
+    }
+    return [];
+  });
+}
+
 async function ingestFile(file: File): Promise<AttachmentPreview> {
   const kind = detectKind(file);
   const base = {
@@ -104,6 +133,7 @@ async function ingestFile(file: File): Promise<AttachmentPreview> {
     if (kind === "image") {
       const mimeType = normalizedImageMime(file);
       const visionSupported = Boolean(mimeType && supportedVisionMimeTypes.has(mimeType));
+      const dataUrl = visionSupported && mimeType ? await readDataUrl(file, mimeType) : undefined;
       return {
         ...base,
         type: mimeType ?? file.type,
@@ -111,11 +141,38 @@ async function ingestFile(file: File): Promise<AttachmentPreview> {
           ? "Image file accepted, previewed in the browser, and included as model vision input."
           : "Image file accepted and previewed in the browser. This image format is not sent as model vision input.",
         url: URL.createObjectURL(file),
-        dataUrl: visionSupported && mimeType ? await readDataUrl(file, mimeType) : undefined,
-        visionSupported
+        dataUrl,
+        visionSupported,
+        runAttachment:
+          visionSupported && dataUrl && mimeType
+            ? {
+                kind: "image",
+                name: file.name,
+                mime_type: mimeType,
+                size_bytes: file.size,
+                image_url: dataUrl,
+                detail: "auto"
+              }
+            : undefined
       };
     }
-    if (kind === "document" || kind === "spreadsheet" || kind === "presentation" || kind === "pdf") {
+    if (kind === "pdf") {
+      const dataBase64 = await readBase64(file);
+      return {
+        ...base,
+        type: file.type || "application/pdf",
+        summary: "PDF accepted for backend text extraction. Short PDFs are added as full text; longer PDFs are exposed through grep-style or progressive block tools.",
+        runAttachment: {
+          kind: "pdf",
+          id: base.id,
+          name: file.name,
+          mime_type: file.type || "application/pdf",
+          size_bytes: file.size,
+          data_base64: dataBase64
+        }
+      };
+    }
+    if (kind === "document" || kind === "spreadsheet" || kind === "presentation") {
       return {
         ...base,
         summary:
@@ -190,12 +247,21 @@ function normalizedImageMime(file: Pick<File, "name" | "type">) {
 
 async function readDataUrl(file: File, mimeType: string) {
   const bytes = new Uint8Array(await file.arrayBuffer());
+  const encoded = bytesToBase64(bytes);
+  return `data:${mimeType};base64,${encoded}`;
+}
+
+async function readBase64(file: File) {
+  return bytesToBase64(new Uint8Array(await file.arrayBuffer()));
+}
+
+function bytesToBase64(bytes: Uint8Array) {
   const chunkSize = 0x8000;
   let binary = "";
   for (let index = 0; index < bytes.length; index += chunkSize) {
     binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
   }
-  return `data:${mimeType};base64,${btoa(binary)}`;
+  return btoa(binary);
 }
 
 async function readLimitedText(file: File) {

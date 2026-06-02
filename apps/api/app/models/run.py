@@ -3,13 +3,14 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.agent import AgentRunConfig
 from app.models.harness_modules import normalize_harness_modules
 from app.models.project import utc_now_iso
 
 SUPPORTED_RUN_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+SUPPORTED_RUN_PDF_MIME_TYPES = {"application/pdf", "application/octet-stream"}
 
 
 class InputMode(str, Enum):
@@ -81,28 +82,67 @@ def default_agent_profiles() -> list[ProfileConfig]:
 
 
 class RunAttachment(BaseModel):
-    kind: Literal["image"] = "image"
+    kind: Literal["image", "pdf"] = "image"
+    id: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$")
     name: str = Field(min_length=1, max_length=255)
     mime_type: str = Field(min_length=1, max_length=120)
     size_bytes: int = Field(ge=0)
-    image_url: str = Field(min_length=1)
+    image_url: str | None = None
     detail: Literal["auto", "low", "high"] = "auto"
+    data_base64: str | None = Field(default=None, exclude=True)
+    page_count: int | None = Field(default=None, ge=0)
+    char_count: int | None = Field(default=None, ge=0)
+    line_count: int | None = Field(default=None, ge=0)
+    parser: str | None = None
+    text_path: str | None = None
+    line_index_path: str | None = None
+    block_index_path: str | None = None
 
     @field_validator("mime_type")
     @classmethod
     def validate_mime_type(cls, value: str) -> str:
         if value == "image/jpg":
             return "image/jpeg"
-        if value in SUPPORTED_RUN_IMAGE_MIME_TYPES:
+        if value in SUPPORTED_RUN_IMAGE_MIME_TYPES or value in SUPPORTED_RUN_PDF_MIME_TYPES:
             return value
-        raise ValueError("Image attachments support PNG, JPEG, WEBP, or GIF.")
+        raise ValueError("Attachments support image PNG, JPEG, WEBP, GIF, or PDF.")
 
     @field_validator("image_url")
     @classmethod
-    def validate_image_url(cls, value: str) -> str:
+    def validate_image_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
         if value.startswith(("data:image/", "https://", "http://")):
             return value
         raise ValueError("Image attachments must use a data URL or fully qualified URL.")
+
+    @field_validator("data_base64")
+    @classmethod
+    def validate_data_base64(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if not value.strip():
+            raise ValueError("PDF data_base64 must not be empty.")
+        return value
+
+    @field_validator("kind")
+    @classmethod
+    def validate_kind(cls, value: str) -> str:
+        return value
+
+    @model_validator(mode="after")
+    def validate_attachment_payload(self) -> "RunAttachment":
+        if self.kind == "image":
+            if self.mime_type not in SUPPORTED_RUN_IMAGE_MIME_TYPES:
+                raise ValueError("Image attachments support PNG, JPEG, WEBP, or GIF.")
+            if not self.image_url:
+                raise ValueError("Image attachments require image_url.")
+        if self.kind == "pdf":
+            if self.mime_type not in SUPPORTED_RUN_PDF_MIME_TYPES:
+                raise ValueError("PDF attachments require application/pdf mime_type.")
+            if not self.data_base64 and not self.text_path:
+                raise ValueError("PDF attachments require data_base64 before extraction.")
+        return self
 
 
 class RunCreate(BaseModel):

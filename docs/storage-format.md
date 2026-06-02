@@ -123,6 +123,22 @@ runs/
     "allow_subagents": true,
     "allow_container_tools": true
   },
+  "attachments": [
+    {
+      "kind": "pdf",
+      "id": "pdf_...",
+      "name": "paper.pdf",
+      "mime_type": "application/pdf",
+      "size_bytes": 48012,
+      "page_count": 12,
+      "char_count": 38210,
+      "line_count": 620,
+      "parser": "pypdf",
+      "text_path": "attachments/pdf_....txt",
+      "line_index_path": "attachments/pdf_....lines.txt",
+      "block_index_path": "attachments/pdf_....blocks.json"
+    }
+  ],
   "created_at": "2026-05-22T00:00:00+00:00",
   "updated_at": "2026-05-22T00:00:00+00:00"
 }
@@ -131,6 +147,16 @@ runs/
 Run status values are `submitted`, `running`, `completed`, `failed`, and `cancelled`.
 
 `surface_payload` is optional and remains `null` for Chat runs. Agent runs store an `agent` payload; if the client omits it, the backend derives `objective` from `prompt`.
+
+PDF attachments are accepted in create-run requests with `data_base64`, but raw PDF bytes are excluded from stored JSON. During run creation the backend extracts local text and writes:
+
+```text
+runs/{run_id}/attachments/{attachment_id}.txt
+runs/{run_id}/attachments/{attachment_id}.lines.txt
+runs/{run_id}/attachments/{attachment_id}.blocks.json
+```
+
+Short extracted PDFs are appended to NoHarness prompt context as full text. Longer PDFs use line-indexed grep/read tools. Harness profiles use progressive block search/read tools modeled after the Documa PDF chat example: search finds candidate blocks, read tools provide evidence text with page refs and block ids.
 
 ## Harness Config
 
@@ -155,7 +181,7 @@ Each project stores its default Harness module profile at `config/harness.defaul
 }
 ```
 
-Run-level `harness_modules` are the effective booleans after applying API/UI overrides to the project config. They are stored in `run.json` and repeated in profile `input.json` files with the final instructions for traceability. Supported image attachments are stored on `run.json` as provider-ready image URLs; profile `input.json` repeats only attachment metadata. Profiles also store `tool_names` for the tools sent to the provider. Harness profiles and `Harness Agent` with `tool_policy` enabled receive the full set, including `standard.shell.bash`, `standard.code.container_exec`, `harness.subagent.run`, and `multi_tool_use.parallel`; `NoHarness` and `NoHarness Agent` receive standard web/fs/data tools but omit those four. Harness profiles with `consequence_gate` enabled can also write `harness_decision` events before provider execution when the prompt appears to produce externally visible content. Those events may contain preview audit fields such as `missing_context`, `scanner_coverage_gaps`, `scanner_findings`, `similarity_matches`, `provenance_findings`, `claim_gaps`, `offer_disclosure_gaps`, `provenance_gaps`, and `rollback_constraints`; these are local trace data, not a production blacklist.
+Run-level `harness_modules` are the effective booleans after applying API/UI overrides to the project config. They are stored in `run.json` and repeated in profile `input.json` files with the final instructions for traceability. Supported image attachments are stored on `run.json` as provider-ready image URLs; profile `input.json` repeats only attachment metadata. PDF attachments are stored as extracted-text index paths plus metadata, never as raw base64 bytes. Profiles also store `tool_names` for the tools sent to the provider. Harness profiles and `Harness Agent` with `tool_policy` enabled receive the full set, including `standard.shell.bash`, `standard.code.container_exec`, `harness.subagent.run`, and `multi_tool_use.parallel`; `NoHarness` and `NoHarness Agent` receive standard web/fs/data tools but omit those four. PDF tool names are profile-specific: `attachment.pdf.grep` and `attachment.pdf.read_lines` for NoHarness long-PDF reading; `attachment.pdf.search_blocks`, `attachment.pdf.read_block`, and `attachment.pdf.read_blocks` for Harness progressive PDF reading. Harness profiles with `consequence_gate` enabled can also write `harness_decision` events before provider execution when the prompt appears to produce externally visible content. Those events may contain preview audit fields such as `missing_context`, `scanner_coverage_gaps`, `scanner_findings`, `similarity_matches`, `provenance_findings`, `claim_gaps`, `offer_disclosure_gaps`, `provenance_gaps`, and `rollback_constraints`; these are local trace data, not a production blacklist.
 Older artifacts that use `context_manifest` are read as `context_summary` for backward compatibility.
 
 Profile `input.json`:

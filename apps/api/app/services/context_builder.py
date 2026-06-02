@@ -26,6 +26,17 @@ HARNESS_MODULE_INSTRUCTIONS = {
     "memory_selection": "Use only memory or preference details that are relevant to this turn.",
     "post_answer_critique": "End with a short self-check when the task has meaningful risk or ambiguity.",
     "token_budgeter": "Keep context and output compact; avoid repeating low-value history.",
+    "consequence_gate": (
+        "For artifacts that may be externally visible or affect real people, run a "
+        "Consequence Gate before giving publish-ready output: identify missing release "
+        "context, affected stakeholders, reasonable hostile/trauma/political/"
+        "commercialization misread paths, release constraints, and needed reviewers. "
+        "Also surface required scanner coverage gaps, scanner findings, similarity matches, "
+        "claim evidence gaps, offer disclosure gaps, AI/source provenance gaps, rights "
+        "metadata gaps, and rollback readiness gaps. "
+        "If release context or evidence is missing, ask for it or provide a clearly "
+        "non-publishable draft instead of relying on a human to notice the risk."
+    ),
 }
 
 
@@ -41,3 +52,4 @@ def build_instructions(profile_label: str, harness_modules: dict[str, bool] | No
             [f"You are profile '{profile_label}' in HarnessDiff.", *enabled_instructions]
         )
     return f"You are profile '{profile_label}' in HarnessDiff. Respond directly without extra controls."
+

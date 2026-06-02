@@ -90,6 +90,7 @@ export type AttachmentPreview = {
   url?: string;
   dataUrl?: string;
   visionSupported?: boolean;
+  runAttachment?: RunAttachmentInput;
 };
 
 export type VisionAttachmentInput = {
@@ -100,6 +101,17 @@ export type VisionAttachmentInput = {
   image_url: string;
   detail?: "auto" | "low" | "high";
 };
+
+export type PdfAttachmentInput = {
+  kind: "pdf";
+  id: string;
+  name: string;
+  mime_type: string;
+  size_bytes: number;
+  data_base64: string;
+};
+
+export type RunAttachmentInput = VisionAttachmentInput | PdfAttachmentInput;
 
 export type ProfileState = {
   messages: Message[];

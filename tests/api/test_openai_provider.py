@@ -145,7 +145,7 @@ def test_openai_stream_kwargs_can_include_tools() -> None:
     assert kwargs["tools"] == tools
 
 
-def test_openai_stream_kwargs_includes_prompt_cache_key() -> None:
+def test_openai_stream_kwargs_sends_prompt_cache_key_in_extra_body() -> None:
     request = LLMRequest(
         profile_id="harness",
         profile_label="Harness",
@@ -158,7 +158,11 @@ def test_openai_stream_kwargs_includes_prompt_cache_key() -> None:
 
     kwargs = _build_stream_kwargs(request)
 
-    assert kwargs["prompt_cache_key"] == "harnessdiff:project:proj_1:profile:harness"
+    assert "prompt_cache_key" not in kwargs
+    assert (
+        kwargs["extra_body"]["prompt_cache_key"]
+        == "harnessdiff:project:proj_1:profile:harness"
+    )
 
 
 def test_to_dict_falls_back_when_sdk_model_dump_fails() -> None:

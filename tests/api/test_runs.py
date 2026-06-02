@@ -103,6 +103,10 @@ def _sse_events(body: str) -> list[dict]:
     ]
 
 
+def _flatten_decisions(decision: dict) -> list[dict]:
+    return [decision, *[nested for item in decision.get("contributing_decisions", []) for nested in _flatten_decisions(item)]]
+
+
 def test_run_stream_writes_profile_outputs_usage_and_harnessable_trace(tmp_path) -> None:
     provider = FakeProvider()
     client = TestClient(
@@ -180,6 +184,7 @@ def test_run_stream_writes_profile_outputs_usage_and_harnessable_trace(tmp_path)
     assert "multi_tool_use_parallel" in harness_openai_tools
     assert "Sources" not in requests_by_profile["baseline"].instructions
     assert "Sources" in requests_by_profile["harness"].instructions
+    assert "Consequence Gate" in requests_by_profile["harness"].instructions
     harness_events = [
         json.loads(line)
         for line in (run_dir / "harness" / "events.jsonl").read_text(encoding="utf-8").splitlines()
@@ -207,6 +212,7 @@ def test_run_stream_writes_profile_outputs_usage_and_harnessable_trace(tmp_path)
     assert "standard.code.container_exec" in harness_input["tool_names"]
     assert "harness.subagent.run" in harness_input["tool_names"]
     assert "multi_tool_use.parallel" in harness_input["tool_names"]
+    assert harness_input["harness_modules"]["consequence_gate"] is True
 
     analysis = client.get(f"/api/runs/{run['id']}/analysis")
     assert analysis.status_code == 200
@@ -228,6 +234,164 @@ def test_run_stream_writes_profile_outputs_usage_and_harnessable_trace(tmp_path)
     assert harness_tools["status"] == "sent"
     assert analysis_doc["profiles"]["harness"]["harness_decisions"]
     assert analysis_doc["comparison"]["total_token_delta"] == 0
+
+
+def test_harness_consequence_gate_records_publication_preflight(tmp_path) -> None:
+    provider = FakeProvider()
+    client = TestClient(
+        create_app(data_dir=tmp_path, harnessdiff_home=tmp_path / ".harnessdiff", llm_provider=provider)
+    )
+    project_id = client.post("/api/projects", json={"name": "Consequence gate"}).json()["id"]
+
+    run = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "請幫我發布一篇對外社群貼文，宣傳新的 AI 治理活動。",
+            "input_mode": "integrated",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+            "profiles": [
+                {"id": "baseline", "label": "NoHarness", "harness_modules": {}},
+                {
+                    "id": "harness",
+                    "label": "Harness",
+                    "harness_modules": {"consequence_gate": True, "guardrails": True},
+                },
+            ],
+        },
+    ).json()
+
+    with client.stream("GET", f"/api/runs/{run['id']}/stream") as response:
+        assert response.status_code == 200
+        events = _sse_events("".join(response.iter_text()))
+
+    assert any(event["type"] == "run_completed" for event in events)
+    run_dir = tmp_path / "projects" / project_id / "runs" / run["id"]
+    harness_events = [
+        json.loads(line)
+        for line in (run_dir / "harness" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    consequence_decision = next(
+        event["harness_decision"]
+        for event in harness_events
+        if event.get("harness_decision", {}).get("rule_id", "").startswith("governance.consequence")
+    )
+    assert consequence_decision["effect"] == "WARN"
+    assert consequence_decision["reason"]["missing_context"]
+    assert "market" in consequence_decision["reason"]["missing_context"]
+    assert "publish_window" in consequence_decision["reason"]["missing_context"]
+    assert "asset_hash" in consequence_decision["reason"]["missing_context"]
+    assert consequence_decision["reason"]["risk_hypotheses"]
+    baseline_events = [
+        json.loads(line)
+        for line in (run_dir / "baseline" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert not any("harness_decision" in event for event in baseline_events)
+
+    analysis = client.get(f"/api/runs/{run['id']}/analysis").json()
+    harness_analysis = analysis["profiles"]["harness"]
+    all_decisions = [
+        nested
+        for decision in harness_analysis["harness_decisions"]
+        for nested in _flatten_decisions(decision)
+    ]
+    assert any(decision.get("reason", {}).get("provenance_gaps") for decision in all_decisions)
+    assert any(decision.get("reason", {}).get("rollback_constraints") for decision in all_decisions)
+
+
+def test_harness_consequence_gate_records_structured_preflight_findings(tmp_path) -> None:
+    provider = FakeProvider()
+    client = TestClient(
+        create_app(data_dir=tmp_path, harnessdiff_home=tmp_path / ".harnessdiff", llm_provider=provider)
+    )
+    project_id = client.post("/api/projects", json={"name": "Structured consequence gate"}).json()["id"]
+
+    run = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": (
+                "請幫我發布對外社群廣告：免費贈品搭配自動續訂訂閱，"
+                "並加入健康功效比較、傳統文化圖樣來源、相似參考素材、地圖海報。"
+            ),
+            "input_mode": "integrated",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+            "profiles": [
+                {"id": "baseline", "label": "NoHarness", "harness_modules": {}},
+                {
+                    "id": "harness",
+                    "label": "Harness",
+                    "harness_modules": {"consequence_gate": True, "guardrails": True},
+                },
+            ],
+        },
+    ).json()
+
+    with client.stream("GET", f"/api/runs/{run['id']}/stream") as response:
+        assert response.status_code == 200
+        events = _sse_events("".join(response.iter_text()))
+
+    assert any(event["type"] == "run_completed" for event in events)
+    run_dir = tmp_path / "projects" / project_id / "runs" / run["id"]
+    harness_events = [
+        json.loads(line)
+        for line in (run_dir / "harness" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    decisions = [
+        nested
+        for event in harness_events
+        if "harness_decision" in event
+        for nested in _flatten_decisions(event["harness_decision"])
+    ]
+    reasons = [decision.get("reason", {}) for decision in decisions]
+    assert any(reason.get("claim_gaps") for reason in reasons)
+    assert any(reason.get("offer_disclosure_gaps") for reason in reasons)
+    assert any(reason.get("provenance_gaps") for reason in reasons)
+    assert any(reason.get("scanner_coverage_gaps") for reason in reasons)
+    assert any(reason.get("scanner_findings") for reason in reasons)
+    assert any(reason.get("similarity_matches") for reason in reasons)
+    assert any(reason.get("provenance_findings") for reason in reasons)
+    assert any(reason.get("rollback_constraints") for reason in reasons)
+    assert {request.profile_id for request in provider.requests} == {"baseline", "harness"}
+
+
+def test_consequence_gate_does_not_run_for_non_public_prompt(tmp_path) -> None:
+    provider = FakeProvider()
+    client = TestClient(
+        create_app(data_dir=tmp_path, harnessdiff_home=tmp_path / ".harnessdiff", llm_provider=provider)
+    )
+    project_id = client.post("/api/projects", json={"name": "Consequence gate quiet"}).json()["id"]
+
+    run = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "請整理這段 Python 函式的重構方向。",
+            "input_mode": "integrated",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+            "profiles": [
+                {
+                    "id": "harness",
+                    "label": "Harness",
+                    "harness_modules": {"consequence_gate": True, "guardrails": True},
+                }
+            ],
+        },
+    ).json()
+
+    with client.stream("GET", f"/api/runs/{run['id']}/stream") as response:
+        assert response.status_code == 200
+        _ = "".join(response.iter_text())
+
+    run_dir = tmp_path / "projects" / project_id / "runs" / run["id"]
+    harness_events = [
+        json.loads(line)
+        for line in (run_dir / "harness" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert not any(
+        (event.get("harness_decision", {}).get("rule_id") or "").startswith("governance.consequence")
+        for event in harness_events
+    )
 
 
 def test_run_applies_profile_level_harness_modules_to_instructions(tmp_path) -> None:
@@ -495,6 +659,49 @@ def test_explicit_dollar_skill_invocation_takes_priority_over_llm_selection(tmp_
     assert "# Web workflow" in instructions
 
 
+def test_explicit_slash_skill_invocation_loads_full_skill_context(tmp_path) -> None:
+    home = tmp_path / "home"
+    skill_dir = home / "skills" / "code-reviewer"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: code-reviewer\n"
+        "description: Review code for likely bugs and regressions.\n"
+        "---\n"
+        "# Code review workflow\n",
+        encoding="utf-8",
+    )
+    provider = SkillSelectingProvider(())
+    client = TestClient(
+        create_app(data_dir=tmp_path / "data", harnessdiff_home=home, llm_provider=provider)
+    )
+    project_id = client.post("/api/projects", json={"name": "Slash skill selector"}).json()["id"]
+
+    run = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "/code-reviewer check this patch",
+            "input_mode": "integrated",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+            "profiles": [{"id": "controlled", "label": "Controlled", "harness_modules": {}}],
+        },
+    ).json()
+    with client.stream("GET", f"/api/runs/{run['id']}/stream") as response:
+        assert response.status_code == 200
+        events = _sse_events("".join(response.iter_text()))
+
+    instructions = provider.requests[-1].instructions
+    assert "Activated skill 1: code-reviewer" in instructions
+    assert "# Code review workflow" in instructions
+    assert any(
+        event["type"] == "skill_invocation"
+        and event["skill_id"] == "code-reviewer"
+        and event["metadata"]["source"] == "explicit"
+        for event in events
+    )
+
+
 def test_deterministic_skill_match_is_used_when_llm_selector_returns_empty(tmp_path) -> None:
     home = tmp_path / "home"
     skill_dir = home / "skills" / "earnings-call-interpretation"
@@ -559,6 +766,60 @@ def test_deterministic_skill_match_is_used_when_llm_selector_returns_empty(tmp_p
         and event["skill_id"] == "earnings-call-interpretation"
         for event in baseline_events
     )
+
+
+def test_skill_invocation_event_includes_resolver_metadata_and_missing_tools(tmp_path) -> None:
+    home = tmp_path / "home"
+    skill_dir = home / "skills" / "invoice-helper"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: invoice-helper\n"
+        "description: Use when the user asks to summarize invoices or extract invoice totals.\n"
+        "load_policy: mandatory_before_execution\n"
+        "priority: 12\n"
+        "required_tools:\n"
+        "  - standard.code.container_exec\n"
+        "allowed-tools: standard.web.search, standard.web.fetch\n"
+        "---\n"
+        "# Invoice workflow\n",
+        encoding="utf-8",
+    )
+    provider = SkillSelectingProvider(())
+    client = TestClient(
+        create_app(data_dir=tmp_path / "data", harnessdiff_home=home, llm_provider=provider)
+    )
+    project_id = client.post("/api/projects", json={"name": "Skill metadata"}).json()["id"]
+
+    run = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "Please summarize invoice totals.",
+            "input_mode": "integrated",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+            "profiles": [{"id": "controlled", "label": "Controlled", "harness_modules": {}}],
+        },
+    ).json()
+    with client.stream("GET", f"/api/runs/{run['id']}/stream") as response:
+        assert response.status_code == 200
+        events = _sse_events("".join(response.iter_text()))
+
+    instructions = provider.requests[-1].instructions
+    assert "Load policy: mandatory_before_execution" in instructions
+    assert "Required tools: standard.code.container_exec" in instructions
+
+    invocation = next(event for event in events if event["type"] == "skill_invocation")
+    assert invocation["skill_id"] == "invoice-helper"
+    assert invocation["metadata"]["source"] == "deterministic"
+    assert invocation["metadata"]["load_policy"] == "mandatory_before_execution"
+    assert invocation["metadata"]["priority"] == 12
+    assert invocation["metadata"]["required_tools"] == ["standard.code.container_exec"]
+    assert invocation["metadata"]["allowed_tools"] == [
+        "standard.web.search",
+        "standard.web.fetch",
+    ]
+    assert invocation["metadata"]["missing_required_tools"] == ["standard.code.container_exec"]
 
 
 def test_deterministic_skill_match_is_merged_with_adjacent_llm_selection(tmp_path) -> None:
@@ -1384,3 +1645,5 @@ class FakeStream:
             return next(self._iter)
         except StopIteration as exc:
             raise StopAsyncIteration from exc
+
+

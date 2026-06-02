@@ -95,6 +95,9 @@ def test_import_folder_requires_skill_md_and_lists_summary(tmp_path) -> None:
             "name": "folder-skill",
             "description": "Folder description",
             "version": "",
+            "enabled": True,
+            "can_toggle": True,
+            "can_delete": True,
             "path": str((tmp_path / "home" / "skills" / "folder-skill").resolve()),
         }
     ]
@@ -144,6 +147,37 @@ def test_codex_style_skill_discovery_scans_project_and_user_scopes(tmp_path) -> 
     detail = store.read_skill("shared-skill")
     assert "# Project" in detail["content"]
     assert detail["scope"] == "project"
+
+
+def test_skill_management_api_toggles_and_deletes_imported_skills(tmp_path) -> None:
+    client = TestClient(create_app(data_dir=tmp_path / "data", harnessdiff_home=tmp_path / "home"))
+    content = b"---\nname: managed-skill\ndescription: Managed\n---\n# Managed\n"
+    created = client.post(
+        "/api/skills/import",
+        json={"mode": "skill", "filename": "managed.skill", "data_base64": _b64(content)},
+    ).json()["skill"]
+
+    disabled = client.patch(f"/api/skills/{created['id']}", json={"enabled": False})
+
+    assert disabled.status_code == 200
+    assert disabled.json()["enabled"] is False
+    skill_path = tmp_path / "home" / "skills" / "managed-skill" / "SKILL.md"
+    assert "enabled: false" in skill_path.read_text(encoding="utf-8")
+    assert SkillStore(home_dir=tmp_path / "home", repo_root=tmp_path / "repo").list_skills() == []
+    managed = client.get("/api/skills").json()["skills"]
+    assert managed[0]["id"] == created["id"]
+    assert managed[0]["enabled"] is False
+
+    enabled = client.patch(f"/api/skills/{created['id']}", json={"enabled": True})
+
+    assert enabled.status_code == 200
+    assert enabled.json()["enabled"] is True
+    assert "enabled: true" in skill_path.read_text(encoding="utf-8")
+
+    deleted = client.delete(f"/api/skills/{created['id']}")
+
+    assert deleted.status_code == 204
+    assert not skill_path.parent.exists()
 
 
 def test_duplicate_user_skill_names_keep_highest_precedence_record(tmp_path) -> None:
@@ -218,6 +252,61 @@ def test_create_subagent_definition_and_list_it(tmp_path) -> None:
         and subagent["tools"] == ["standard.web.search", "standard.web.fetch"]
         for subagent in subagents
     )
+
+
+def test_subagent_management_api_toggles_and_deletes_definitions(tmp_path) -> None:
+    home = tmp_path / "home"
+    client = TestClient(create_app(data_dir=tmp_path / "data", harnessdiff_home=home))
+
+    disabled = client.patch("/api/subagents/researcher", json={"enabled": False})
+
+    assert disabled.status_code == 200
+    assert disabled.json()["enabled"] is False
+    researcher_path = home / "agents" / "researcher.md"
+    assert "enabled: false" in researcher_path.read_text(encoding="utf-8")
+
+    deleted = client.delete("/api/subagents/researcher")
+
+    assert deleted.status_code == 204
+    assert not researcher_path.exists()
+    subagents = client.get("/api/subagents").json()["subagents"]
+    assert all(subagent["id"] != "researcher" for subagent in subagents)
+
+
+class _FakeToolRuntime:
+    def list_tool_names(self) -> tuple[str, ...]:
+        return ("standard.web.search", "standard.fs.grep")
+
+
+def test_tool_management_api_toggles_and_deletes_tools(tmp_path) -> None:
+    home = tmp_path / "home"
+    client = TestClient(
+        create_app(
+            data_dir=tmp_path / "data",
+            harnessdiff_home=home,
+            tool_runtime=_FakeToolRuntime(),
+        )
+    )
+
+    tools = client.get("/api/tools").json()["tools"]
+    assert [tool["id"] for tool in tools] == [
+        "standard.web.search",
+        "standard.fs.grep",
+        "harness.subagent.run",
+        "multi_tool_use.parallel",
+    ]
+
+    disabled = client.patch("/api/tools/standard.web.search", json={"enabled": False})
+
+    assert disabled.status_code == 200
+    assert disabled.json()["enabled"] is False
+    assert "standard.web.search" not in client.get("/api/health").json()["tools"]["names"]
+
+    deleted = client.delete("/api/tools/standard.web.search")
+
+    assert deleted.status_code == 204
+    tools = client.get("/api/tools").json()["tools"]
+    assert all(tool["id"] != "standard.web.search" for tool in tools)
 
 
 def test_create_subagent_rejects_duplicate_id(tmp_path) -> None:

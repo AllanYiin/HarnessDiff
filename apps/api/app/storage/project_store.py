@@ -24,6 +24,7 @@ from app.models.run import (
 )
 from app.providers.base import LLMImageAttachment
 from app.providers.base import ProviderEvent
+from app.services.pdf_attachments import prepare_pdf_attachments
 from app.storage.errors import InvalidProjectIdError, ProjectNotFoundError, StorageCorruptionError
 from app.storage.json_io import read_json, write_json_atomic
 
@@ -101,16 +102,27 @@ class ProjectStore:
         runs_dir = self._project_dir(project_id) / "runs"
         runs_dir.mkdir(parents=True, exist_ok=True)
         profiles = self._effective_profiles(project, payload)
+        turn_index = self._next_turn_index(runs_dir)
+        run_id = self._new_run_id(runs_dir)
+        run_dir = runs_dir / run_id
+        run_dir.mkdir(parents=True, exist_ok=False)
+        if payload.attachments:
+            payload = payload.model_copy(
+                update={
+                    "attachments": prepare_pdf_attachments(
+                        list(payload.attachments),
+                        run_dir=run_dir,
+                    )
+                }
+            )
         run = new_run_document(
             schema_version=settings.schema_version,
-            run_id=self._new_run_id(runs_dir),
+            run_id=run_id,
             project_id=project_id,
-            turn_index=self._next_turn_index(runs_dir),
+            turn_index=turn_index,
             payload=payload,
             profiles=profiles,
         )
-        run_dir = runs_dir / run.id
-        run_dir.mkdir(parents=True, exist_ok=False)
         write_json_atomic(run_dir / "run.json", run.model_dump(mode="json"))
         return run
 
@@ -212,6 +224,33 @@ class ProjectStore:
                 if isinstance(item, dict):
                     rows.append(item)
         return rows
+
+    def read_profile_tool_calls(
+        self, project_id: str, run_id: str, profile_id: str
+    ) -> list[dict[str, Any]]:
+        return [
+            event["raw"]
+            for event in self._read_profile_events(project_id, run_id, profile_id)
+            if event.get("type") == "tool_call" and isinstance(event.get("raw"), dict)
+        ]
+
+    def read_profile_skill_invocations(
+        self, project_id: str, run_id: str, profile_id: str
+    ) -> list[dict[str, Any]]:
+        invocations: list[dict[str, Any]] = []
+        for event in self._read_profile_events(project_id, run_id, profile_id):
+            if event.get("type") != "skill_invocation":
+                continue
+            invocations.append(
+                {
+                    "skill_id": event.get("skill_id", ""),
+                    "status": event.get("status", "loaded"),
+                    "sequence": event.get("sequence"),
+                    "token_usage": event.get("token_usage", {}),
+                    "metadata": event.get("metadata", {}),
+                }
+            )
+        return invocations
 
     def update_run_status(self, project_id: str, run_id: str, status: RunStatus) -> RunDocument:
         run_dir = self._run_dir(project_id, run_id)
@@ -591,6 +630,23 @@ class ProjectStore:
         with path.open("a", encoding="utf-8", newline="\n") as handle:
             handle.write(json.dumps(payload, ensure_ascii=False))
             handle.write("\n")
+
+    def _read_profile_events(
+        self, project_id: str, run_id: str, profile_id: str
+    ) -> list[dict[str, Any]]:
+        path = self._run_dir(project_id, run_id) / profile_id / "events.jsonl"
+        if not path.exists():
+            return []
+        rows: list[dict[str, Any]] = []
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(item, dict):
+                    rows.append(item)
+        return rows
 
     def _write_repair_report(self, project_id: str, project_dir: Path, project_path: Path) -> Path:
         report_path = project_dir / "repair-report.json"

@@ -1,8 +1,14 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 
-from app.models.skill import SubagentCreateRequest, SubagentCreateResponse, SubagentListResponse
+from app.models.skill import (
+    SubagentCreateRequest,
+    SubagentCreateResponse,
+    SubagentListResponse,
+    SubagentSummary,
+    SubagentUpdateRequest,
+)
 from app.services.skill_store import SkillStore, SubagentDefinitionError
 
 router = APIRouter(prefix="/subagents", tags=["subagents"])
@@ -31,3 +37,26 @@ async def create_subagent(
         return SubagentCreateResponse(subagent=store.create_subagent(payload))
     except SubagentDefinitionError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
+@router.patch("/{subagent_id}", response_model=SubagentSummary)
+async def update_subagent(
+    request: Request, subagent_id: str, payload: SubagentUpdateRequest
+) -> SubagentSummary:
+    try:
+        return get_skill_store(request).update_subagent_enabled(subagent_id, payload.enabled)
+    except SubagentDefinitionError as exc:
+        message = str(exc)
+        status_code = 404 if "not found" in message.lower() else 400
+        raise HTTPException(status_code=status_code, detail=message) from None
+
+
+@router.delete("/{subagent_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_subagent(request: Request, subagent_id: str) -> Response:
+    try:
+        get_skill_store(request).delete_subagent(subagent_id)
+    except SubagentDefinitionError as exc:
+        message = str(exc)
+        status_code = 404 if "not found" in message.lower() else 400
+        raise HTTPException(status_code=status_code, detail=message) from None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

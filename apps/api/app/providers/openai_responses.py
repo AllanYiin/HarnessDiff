@@ -289,7 +289,9 @@ def _build_stream_kwargs(
     if request.reasoning_effort:
         create_kwargs["reasoning"] = {"effort": request.reasoning_effort}
     if request.prompt_cache_key:
-        create_kwargs["prompt_cache_key"] = request.prompt_cache_key
+        create_kwargs.setdefault("extra_body", {})[
+            "prompt_cache_key"
+        ] = request.prompt_cache_key
     if tools:
         create_kwargs["tools"] = tools
     if previous_response_id:

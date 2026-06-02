@@ -9,7 +9,7 @@
 ## 📌 SNAPSHOT — 當前狀態
 <!-- 這一整段每次 /devnote 會被覆寫，只反映「到目前為止的最新狀態」 -->
 
-**最後更新**：2026-05-25 22:21
+**最後更新**：2026-05-28 21:12
 
 ### 需求狀態
 - [x] Stage 0：localhost web app / FastAPI skeleton、README、env 樣板、storage/provider docs。
@@ -30,6 +30,8 @@
 - [x] Vision input：PNG/JPEG/WEBP/GIF 圖片附件會以 base64 data URL 傳入 OpenAI Responses API `input_image`，兩側 profile 都能真正讀圖。
 - [x] Voice input UX：麥克風改成按下即開始、放開/取消自動停止，並支援 Space/Enter 鍵盤按住行為。
 - [x] Skill slash token UI：Composer 內已安裝 skill slash command 會顯示成 teal chip，`contenteditable=false`，Backspace/Delete 會整塊刪除。
+- [x] Harness consequence gate：Harness pane 新增 `consequence_gate` module；對外發布/社群/公告/行銷/客戶可見 prompt 會在 provider 前產生 Consequence Gate preflight `harness_decision`，記錄缺失情境、風險假設與審查需求，NoHarness 不套用。
+- [x] Publishing risk harness preview：`consequence_gate` 進一步記錄 required scanner coverage gaps、scanner findings、similarity matches、claim evidence gaps、offer disclosure gaps、provenance/rights findings/gaps、rollback readiness gaps；分析列會顯示 Harness risk chips，NoHarness 仍維持 baseline。
 - [ ] User message image rendering：使用者訊息 bubble 顯示圖片縮圖的程式已加入，但本次 `/devnote` 前尚未完成 TypeScript / Vitest / Playwright 驗證。
 
 ### 未解問題
@@ -62,6 +64,8 @@
 - **Press-and-hold voice input**：語音輸入控制採 Pointer Events + pointer capture，按下開始、放開/取消停止；鍵盤 Space/Enter 同步支援（詳見 HISTORY `[2026-05-25 22:21]`）。
 - **Skill command as atomic token**：Composer 由 textarea 改為 ARIA `textbox` contenteditable，已安裝 `/skill-id` 渲染為不可編輯 chip，但送出 payload 仍是普通文字（詳見 HISTORY `[2026-05-25 22:21]`）。
 - **Message attachments are display-only**：對話 bubble 圖片顯示使用 `Message.attachments`，不改 provider prompt；provider input 和 UI preview 是兩條資料路徑（詳見 HISTORY `[2026-05-25 22:21]`）。
+- **Consequence Gate 只作用於 Harness pane**：`consequence_gate` 由 `context_builder` 轉成 Harness instructions，並由 `HarnessableControlPlane` 在 provider 前對 publication-like prompt 記錄 `FINAL_OUTPUT_PROPOSED` preflight decision；NoHarness 保持 baseline（詳見 HISTORY `[2026-05-28 19:48]`）。
+- **Publishing risk preview 不做 production 黑名單**：HarnessDiff 只在 Harness pane provider 前產生 preview `harness_decision` 與 UI chips；scanner coverage、similarity/provenance finding、claim/offer/rollback 都走結構化 finding，不在 core 內建 OCR/CV/embedding 或特定事故黑名單（詳見 HISTORY `[2026-05-28 21:12]`）。
 
 ### 已知地雷（仍需注意）
 > 踩過且未來仍可能重踩的坑的一句話提醒。已徹底不可能重現的不列。
@@ -449,3 +453,85 @@
 ### 備註
 - 已完成驗證：OpenAI provider / run API tests 28 passed；TypeScript build 通過；Vitest 14 passed；語音 e2e desktop/mobile passed；skill slash command e2e desktop/mobile passed；完整 Playwright 26 passed；Vite production build 通過。
 - 尚未完成驗證：`Message.attachments` 圖片 bubble 顯示改動是在 `/devnote` 前剛加入，需接續跑 TypeScript、Vitest、相關 Playwright attachment case 與 build。
+
+---
+
+## [2026-05-28 19:48] Harness consequence gate
+
+### 本次做了什麼（增量）
+將 Harnessable 本次新增的泛用 Consequence Gate 思路導入 HarnessDiff。Harness pane 預設多一個 `consequence_gate` module；當 prompt 看起來是對外發布、社群貼文、公告、行銷活動或客戶可見內容時，`HarnessableControlPlane` 會在 provider 前發出 `FINAL_OUTPUT_PROPOSED` preflight event，並把缺失 release context、風險假設與 review needs 寫成 `harness_decision` artifact。NoHarness 不套用此 gate，仍維持 baseline。
+
+### 本次重大技術決策
+- **不把 consequence gate 寫進 provider**
+  - 內容：`context_builder` 只把 `consequence_gate` 轉成 Harness pane instructions；實際 preflight 仍走 `HarnessableControlPlane` 與 Harnessable rule decision。
+  - 理由：維持原本 provider-neutral 邊界，讓 OpenAI provider 只接收最終 `LLMRequest`。
+  - 影響：未來擴充 Anthropic/local provider 不需要理解 consequence gate，只要讀 `LLMRequest.instructions` 與既有 gate artifacts。
+- **只對 publication-like prompt 產生 gate decision**
+  - 內容：先用保守關鍵詞判斷是否涉及對外發布/社群/公告/行銷/客戶可見，再發出 preflight。
+  - 理由：避免所有一般 coding/analysis prompt 都被標成缺少 release context，造成教學噪音。
+  - 影響：未知型態仍靠 prompt instruction 逼模型自我檢查；真正強制攔截可在未來接上明確 publication/action tool。
+
+### 本次失敗經驗與填坑
+- **舊版 Harnessable 不能讓整個 control plane 失效**
+  - 試過無效：直接從 `harnessable` 匯入 `ConsequenceGate`。
+  - 最終解法：`HarnessKernel` / `HarnessRule` 維持必須可用，`ConsequenceGate` 採 optional import；沒有新版 Harnessable 時仍保留既有 guardrails。
+  - 根因：HarnessDiff 可在不同本機開發狀態下啟動，不能假設 sibling Harnessable 一定已升級。
+- **前端新增 toggle 需要 mobile gate**
+  - 試過無效：只跑 TypeScript/Vitest 不足以證明 settings menu 沒破版。
+  - 最終解法：補跑完整 Playwright desktop/mobile，確認新增 `Consequence Gate` toggle 沒造成 overflow 或設定面板回歸。
+  - 根因：Harness settings 是 disclosure UI，新增一列最容易在 mobile 寬度暴露排版問題。
+
+### 備註
+- 驗證結果：`python -m pytest -q` 74 passed、1 skipped；`python -X pycache_prefix=.compile_pycache -m compileall apps\api` 通過；`corepack pnpm --dir apps\web test` 17 passed；`corepack pnpm --dir apps\web build` 通過；`corepack pnpm --dir apps\web test:e2e` 26 passed。
+
+---
+
+## [2026-05-28 20:25] Publishing risk harness preview
+
+### 本次做了什麼（增量）
+將 Harnessable 新增的 publishing risk harness 能力導入 HarnessDiff 的 Harness pane preview：`consequence_gate` 現在會在 provider 前建立更完整的 `risk_context`，並透過 Harnessable preview rules 記錄 missing context、scanner findings、claim evidence gaps、offer disclosure gaps、provenance/rights gaps 與 rollback readiness gaps。前端分析列新增緊湊的 Harness risk chips，讓使用者看見本回合命中的治理缺口，但不把 HarnessDiff 變成真正發布閘門。
+
+### 本次重大技術決策
+- **Preview 而非 blocking publication gateway**
+  - 內容：HarnessDiff 仍只在 `FINAL_OUTPUT_PROPOSED` 階段記錄 `WARN` 型 `harness_decision`，不阻斷 provider 產生比較答案。
+  - 理由：HarnessDiff 是 NoHarness/Harness 教學比較 workbench，不是企業 CMS/CRM 的實際發布管線；真正發布阻擋應交由 Harnessable `PublicationGateway`。
+  - 影響：NoHarness 保持 baseline；Harness pane 顯示治理差異與風險缺口。
+- **Scanner adapter 不引入重依賴**
+  - 內容：不在 HarnessDiff core 內建 OCR/CV/embedding/claim extraction；只用結構化 scanner finding 形狀與 prompt metadata preview。
+  - 理由：符合不新增不必要依賴與不維護禁忌黑名單的設計精神。
+  - 影響：未來若接真實 scanner，只要把結果放進 `scanner_results` 形狀即可。
+
+### 本次失敗經驗與填坑
+- **只記錄缺 context 不足以展示新版 Harnessable 能力**
+  - 試過無效：前一版 `consequence_gate` 只讓 prompt-like public content 產生缺情境與誤讀假設。
+  - 最終解法：新增 HarnessDiff preview rules，讓 claim/offer/provenance/scanner/rollback detector 在 `FINAL_OUTPUT_PROPOSED` 也能以 `WARN` 形式留下 trace。
+  - 根因：Harnessable 的新版 publishing detectors 主要設計給 `PUBLICATION_REQUESTED`；HarnessDiff 若不加 preview rules，UI 看不到新增能力。
+
+### 備註
+- 驗證結果：`python -m pytest tests\api\test_runs.py -q` 24 passed；`python -m pytest -q` 75 passed、1 skipped；`python -X pycache_prefix=.compile_pycache -m compileall apps\api` 通過；`corepack pnpm --dir apps\web test` 17 passed；`corepack pnpm --dir apps\web build` 通過；`corepack pnpm --dir apps\web test:e2e` 26 passed。
+---
+
+## [2026-05-28 21:12] Scanner coverage and provenance contract sync
+
+### 本次做了什麼（增量）
+同步 Harnessable 新增的 scanner coverage 與 similarity/provenance scanner result contract 到 HarnessDiff。Harness pane 的 `consequence_gate` preview 現在會從 publication-like prompt 推斷 `asset_kind`、建立 `scanner_coverage.required_scanners`，並在 prompt 暗示抄襲/相似/來源/文化/授權風險時輸出 `similarity.match` 與 `provenance.review` 形狀的 structured findings。前端 analysis chips 也會顯示 coverage、similarity、provenance finding 訊號。
+
+### 本次重大技術決策
+- **HarnessDiff 只做 preview contract，不做 scanner engine**
+  - 內容：新增 prompt metadata scanner 形狀與 coverage gap 顯示，但不宣稱已跑 OCR/CV/embedding/similarity model。
+  - 理由：HarnessDiff 是教學比較 workbench；真正 scanner 仍應由 Harnessable adapter 或外部 CMS/DAM 接入。
+  - 影響：UI 可展示未知風險如何浮現，但不會把 prompt keyword preview 誤包裝成 production release gate。
+- **Coverage gap 即風險納入 Harness pane**
+  - 內容：高風險 asset kind 會要求 OCR/CV/ASR/similarity/provenance/rights 等 coverage；缺少時寫入 `scanner_coverage_gaps`。
+  - 理由：避免只有 scanner 回報 finding 才有風險，沒有 scanner result 反而被誤解為安全。
+  - 影響：NoHarness 仍是 baseline；Harness pane analysis 會多顯示 coverage 類 risk chip。
+
+### 本次失敗經驗與填坑
+- **測試 prompt 沒有 similarity 語彙卻期待 similarity finding**
+  - 試過無效：直接斷言 `similarity_matches`。
+  - 最終解法：測試 prompt 明確加入「相似參考素材」，讓 fixture 和 detector trigger 對齊。
+  - 根因：prompt metadata preview 是保守觸發，不應憑空產生相似度 finding。
+
+### 備註
+- 驗證結果：`python -m pytest tests\api\test_runs.py -q` 24 passed；`python -m pytest -q` 75 passed、1 skipped；`python -X pycache_prefix=.compile_pycache -m compileall apps\api` 通過；`corepack pnpm --dir apps\web test` 17 passed；`corepack pnpm --dir apps\web build` 通過。
+

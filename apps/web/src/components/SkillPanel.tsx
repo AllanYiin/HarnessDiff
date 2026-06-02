@@ -1,8 +1,8 @@
-import { Bot, FileArchive, FolderUp, Plus, Upload } from "lucide-react";
+import { Bot, FileArchive, FolderUp, Plus, Trash2, Upload, Wrench } from "lucide-react";
 import type { FormEvent, KeyboardEvent } from "react";
 import { useRef, useState } from "react";
 
-import type { SubagentCreatePayload, SubagentSummary, SkillSummary } from "../api";
+import type { SubagentCreatePayload, SubagentSummary, SkillSummary, ToolSummary } from "../api";
 
 type SkillPanelProps = {
   homeDir: string;
@@ -16,18 +16,27 @@ type SkillPanelProps = {
   subagents: SubagentSummary[];
   subagentsLoading: boolean;
   creatingSubagent: boolean;
+  tools: ToolSummary[];
+  toolsLoading: boolean;
   error: string;
   onImportFile: (file: File | null) => void;
   onImportFolder: (files: FileList | null) => void;
   onSelectSkill: (skillId: string) => void;
+  onToggleSkill: (skillId: string, enabled: boolean) => void;
+  onDeleteSkill: (skillId: string) => void;
+  onToggleSubagent: (subagentId: string, enabled: boolean) => void;
+  onDeleteSubagent: (subagentId: string) => void;
+  onToggleTool: (toolId: string, enabled: boolean) => void;
+  onDeleteTool: (toolId: string) => void;
   onCreateSubagent: (payload: SubagentCreatePayload) => Promise<void>;
 };
 
-type SkillPanelTab = "skills" | "subagents";
+type SkillPanelTab = "skills" | "subagents" | "tools";
 
 const panelTabs: Array<{ id: SkillPanelTab; label: string }> = [
   { id: "skills", label: "技能" },
-  { id: "subagents", label: "Subagents" }
+  { id: "subagents", label: "Subagents" },
+  { id: "tools", label: "工具" }
 ];
 
 export function SkillPanel({
@@ -42,10 +51,18 @@ export function SkillPanel({
   subagents,
   subagentsLoading,
   creatingSubagent,
+  tools,
+  toolsLoading,
   error,
   onImportFile,
   onImportFolder,
   onSelectSkill,
+  onToggleSkill,
+  onDeleteSkill,
+  onToggleSubagent,
+  onDeleteSubagent,
+  onToggleTool,
+  onDeleteTool,
   onCreateSubagent
 }: SkillPanelProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -113,8 +130,14 @@ export function SkillPanel({
     setActiveTab(panelTabs[nextIndex].id);
   }
 
-  const activePath = activeTab === "skills" ? skillsDir || homeDir : agentsDir || "agents";
-  const activeTitle = activeTab === "skills" ? "技能" : "Subagents";
+  const activePath =
+    activeTab === "skills"
+      ? skillsDir || homeDir
+      : activeTab === "subagents"
+        ? agentsDir || "agents"
+        : "HarnessDiff runtime tools";
+  const activeTitle =
+    activeTab === "skills" ? "技能" : activeTab === "subagents" ? "Subagents" : "工具";
 
   return (
     <aside className="skillPanel" aria-label="技能管理">
@@ -166,7 +189,7 @@ export function SkillPanel({
               }}
             />
           </div>
-        ) : (
+        ) : activeTab === "subagents" ? (
           <button
             className="iconButton"
             type="button"
@@ -176,7 +199,7 @@ export function SkillPanel({
           >
             <Plus aria-hidden="true" size={16} />
           </button>
-        )}
+        ) : null}
       </header>
       {error ? <p className="panelError">{error}</p> : null}
       <div className="skillTabs" role="tablist" aria-label="技能與 Subagents">
@@ -196,7 +219,13 @@ export function SkillPanel({
               onKeyDown={(event) => moveTabFocus(event, tab.id)}
             >
               <span>{tab.label}</span>
-              <strong>{tab.id === "skills" ? skills.length : subagents.length}</strong>
+              <strong>
+                {tab.id === "skills"
+                  ? skills.length
+                  : tab.id === "subagents"
+                    ? subagents.length
+                    : tools.length}
+              </strong>
             </button>
           );
         })}
@@ -213,15 +242,51 @@ export function SkillPanel({
           {skills.length ? (
             <div className="skillList">
               {skills.map((skill) => (
-                <button
-                  className={`skillItem ${selectedSkillId === skill.id ? "selected" : ""}`}
+                <div
+                  className={`skillItem ${selectedSkillId === skill.id ? "selected" : ""} ${
+                    skill.enabled ? "" : "disabledSkill"
+                  }`}
                   key={skill.id}
-                  type="button"
-                  onClick={() => onSelectSkill(skill.id)}
                 >
-                  <strong>{skill.name}</strong>
-                  <span>{skill.description || "沒有描述"}</span>
-                </button>
+                  <button
+                    className="skillSelectButton"
+                    type="button"
+                    onClick={() => onSelectSkill(skill.id)}
+                  >
+                    <span className="skillItemTitle">
+                      <strong>{skill.name}</strong>
+                      <small>{skill.enabled ? "啟用中" : "已停用"}</small>
+                    </span>
+                    <span>{skill.description || "沒有描述"}</span>
+                  </button>
+                  <div className="skillRowActions">
+                    <button
+                      className="skillSwitch"
+                      type="button"
+                      role="switch"
+                      aria-checked={skill.enabled ? "true" : "false"}
+                      aria-label={`${skill.enabled ? "停用" : "啟用"} ${skill.name}`}
+                      disabled={!skill.can_toggle}
+                      onClick={() => onToggleSkill(skill.id, !skill.enabled)}
+                    >
+                      <span aria-hidden="true" />
+                    </button>
+                    <button
+                      className="iconButton dangerIconButton"
+                      type="button"
+                      aria-label={`刪除 ${skill.name}`}
+                      title={skill.can_delete ? "刪除技能" : "只能刪除匯入到 HarnessDiff skills 目錄的技能"}
+                      disabled={!skill.can_delete}
+                      onClick={() => {
+                        if (window.confirm(`確定要刪除「${skill.name}」嗎？`)) {
+                          onDeleteSkill(skill.id);
+                        }
+                      }}
+                    >
+                      <Trash2 aria-hidden="true" size={15} />
+                    </button>
+                  </div>
+                </div>
               ))}
             </div>
           ) : (
@@ -248,19 +313,51 @@ export function SkillPanel({
           {subagents.length ? (
             <div className="subagentList">
               {subagents.map((subagent) => (
-                <div className="subagentItem" key={subagent.id}>
-                  <Bot aria-hidden="true" size={16} />
-                  <div>
-                    <strong>{subagent.label}</strong>
+                <div
+                  className={`subagentItem ${subagent.enabled ? "" : "disabledSkill"}`}
+                  key={subagent.id}
+                >
+                  <Wrench aria-hidden="true" size={16} />
+                  <div className="managedItemBody">
+                    <span className="skillItemTitle">
+                      <strong>{subagent.label}</strong>
+                      <small>{subagent.enabled ? "啟用中" : "已停用"}</small>
+                    </span>
                     <span>{subagent.id}</span>
                     {subagent.description ? <p>{subagent.description}</p> : null}
+                  </div>
+                  <div className="skillRowActions">
+                    <button
+                      className="skillSwitch"
+                      type="button"
+                      role="switch"
+                      aria-checked={subagent.enabled ? "true" : "false"}
+                      aria-label={`${subagent.enabled ? "停用" : "啟用"} ${subagent.label}`}
+                      disabled={!subagent.can_toggle}
+                      onClick={() => onToggleSubagent(subagent.id, !subagent.enabled)}
+                    >
+                      <span aria-hidden="true" />
+                    </button>
+                    <button
+                      className="iconButton dangerIconButton"
+                      type="button"
+                      aria-label={`刪除 ${subagent.label}`}
+                      disabled={!subagent.can_delete}
+                      onClick={() => {
+                        if (window.confirm(`確定要刪除「${subagent.label}」嗎？`)) {
+                          onDeleteSubagent(subagent.id);
+                        }
+                      }}
+                    >
+                      <Trash2 aria-hidden="true" size={15} />
+                    </button>
                   </div>
                 </div>
               ))}
             </div>
           ) : (
             <div className="emptySkillState">
-              <Bot aria-hidden="true" size={18} />
+              <Wrench aria-hidden="true" size={18} />
               <span>尚未建立 Subagent</span>
             </div>
           )}
@@ -364,6 +461,66 @@ export function SkillPanel({
               </button>
             </form>
           ) : null}
+        </section>
+        <section
+          id="skill-panel-tools"
+          className="skillTabPanel"
+          role="tabpanel"
+          aria-labelledby="skill-panel-tab-tools"
+          hidden={activeTab !== "tools"}
+        >
+          {toolsLoading ? <p className="panelMuted">載入中</p> : null}
+          {tools.length ? (
+            <div className="subagentList">
+              {tools.map((tool) => (
+                <div
+                  className={`subagentItem ${tool.enabled ? "" : "disabledSkill"}`}
+                  key={tool.id}
+                >
+                  <Bot aria-hidden="true" size={16} />
+                  <div className="managedItemBody">
+                    <span className="skillItemTitle">
+                      <strong>{tool.name}</strong>
+                      <small>{tool.enabled ? "啟用中" : "已停用"}</small>
+                    </span>
+                    <span>{tool.id}</span>
+                    {tool.description ? <p>{tool.description}</p> : null}
+                  </div>
+                  <div className="skillRowActions">
+                    <button
+                      className="skillSwitch"
+                      type="button"
+                      role="switch"
+                      aria-checked={tool.enabled ? "true" : "false"}
+                      aria-label={`${tool.enabled ? "停用" : "啟用"} ${tool.name}`}
+                      disabled={!tool.can_toggle}
+                      onClick={() => onToggleTool(tool.id, !tool.enabled)}
+                    >
+                      <span aria-hidden="true" />
+                    </button>
+                    <button
+                      className="iconButton dangerIconButton"
+                      type="button"
+                      aria-label={`刪除 ${tool.name}`}
+                      disabled={!tool.can_delete}
+                      onClick={() => {
+                        if (window.confirm(`確定要刪除「${tool.name}」嗎？`)) {
+                          onDeleteTool(tool.id);
+                        }
+                      }}
+                    >
+                      <Trash2 aria-hidden="true" size={15} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="emptySkillState">
+              <Bot aria-hidden="true" size={18} />
+              <span>尚無工具</span>
+            </div>
+          )}
         </section>
       </div>
     </aside>

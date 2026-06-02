@@ -13,6 +13,7 @@ from app.services.subagent_runtime import (
     subagent_openai_tool_for_definitions,
 )
 from app.services.container_code_runtime import CONTAINER_CODE_TOOL_NAME
+from app.services.pdf_attachments import PdfAttachmentToolRuntime
 from app.services.tool_runtime import (
     ToolAnythingRuntime,
     _elapsed_ms,
@@ -67,12 +68,14 @@ class ChatToolRuntime:
         excluded_tool_names: tuple[str, ...] = (),
         include_subagent: bool = True,
         include_parallel: bool = True,
+        pdf_runtime: PdfAttachmentToolRuntime | None = None,
     ) -> None:
         self.standard_runtime = standard_runtime
         self.subagent_runtime = subagent_runtime
         self.excluded_tool_names = set(excluded_tool_names)
         self.include_subagent = include_subagent
         self.include_parallel = include_parallel
+        self.pdf_runtime = pdf_runtime
 
     def list_openai_tools(self) -> list[dict[str, Any]]:
         tools = _prioritize_openai_tools(
@@ -84,6 +87,8 @@ class ChatToolRuntime:
             ],
             self.standard_runtime,
         )
+        if self.pdf_runtime is not None:
+            tools.extend(self.pdf_runtime.list_openai_tools())
         if self.include_subagent:
             definitions = getattr(self.subagent_runtime, "definitions", DEFAULT_SUBAGENTS)
             tools.append(subagent_openai_tool_for_definitions(definitions))
@@ -99,6 +104,8 @@ class ChatToolRuntime:
                 if name not in self.excluded_tool_names
             ]
         )
+        if self.pdf_runtime is not None:
+            names.extend(self.pdf_runtime.list_tool_names())
         if self.include_subagent:
             names.append(SUBAGENT_TOOL_NAME)
         if self.include_parallel:
@@ -112,6 +119,8 @@ class ChatToolRuntime:
             if not self.include_subagent:
                 return _tool_not_allowed(openai_name, SUBAGENT_TOOL_NAME, arguments)
             return await self.subagent_runtime.invoke(openai_name, arguments)
+        if self.pdf_runtime is not None and self.pdf_runtime.from_openai_name(openai_name):
+            return await self.pdf_runtime.invoke_openai_tool(openai_name, arguments)
         original_name = self.standard_runtime.from_openai_name(openai_name)
         if original_name in self.excluded_tool_names:
             return _tool_not_allowed(openai_name, original_name, arguments)

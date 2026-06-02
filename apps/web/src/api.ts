@@ -5,9 +5,10 @@ import type {
   MessageAttachment,
   ProfileId,
   ProfileInstance,
+  RunAttachmentInput,
+  SkillInvocationTrace,
   SurfaceType,
   ToolCallTrace,
-  VisionAttachmentInput
 } from "./types";
 
 type Project = {
@@ -30,7 +31,14 @@ export type TranscriptRun = {
   input_mode: InputMode;
   status: string;
   attachments: MessageAttachment[];
-  profiles: Array<ProfileInstance & { output_text: string; steps: AgentStepTrace[] }>;
+  profiles: Array<
+    ProfileInstance & {
+      output_text: string;
+      steps: AgentStepTrace[];
+      tool_calls: ToolCallTrace[];
+      skill_invocations: SkillInvocationTrace[];
+    }
+  >;
 };
 
 export type ProjectTranscript = {
@@ -131,6 +139,9 @@ export type SkillSummary = {
   name: string;
   description: string;
   version: string;
+  enabled: boolean;
+  can_toggle: boolean;
+  can_delete: boolean;
   path: string;
 };
 
@@ -155,6 +166,8 @@ export type SubagentSummary = {
   max_output_chars: number;
   tools?: string[];
   enabled: boolean;
+  can_toggle: boolean;
+  can_delete: boolean;
   path: string;
 };
 
@@ -173,6 +186,19 @@ export type SubagentCreatePayload = {
   max_output_chars: number;
   tools?: string[];
   enabled: boolean;
+};
+
+export type ToolSummary = {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  can_toggle: boolean;
+  can_delete: boolean;
+};
+
+export type ToolListResponse = {
+  tools: ToolSummary[];
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -228,7 +254,9 @@ function normalizeTranscriptRun(value: unknown): TranscriptRun | null {
           label: asString(profile.label, profile.id),
           harness_modules: normalizeHarnessModules(profile.harness_modules),
           output_text: asString(profile.output_text),
-          steps: normalizeAgentSteps(profile.steps)
+          steps: normalizeAgentSteps(profile.steps),
+          tool_calls: normalizeToolCalls(profile.tool_calls),
+          skill_invocations: normalizeSkillInvocations(profile.skill_invocations)
         }];
       })
     : [];
@@ -240,6 +268,51 @@ function normalizeTranscriptRun(value: unknown): TranscriptRun | null {
     attachments: normalizeTranscriptAttachments(value.attachments),
     profiles
   };
+}
+
+function normalizeToolCalls(value: unknown): ToolCallTrace[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((toolCall) => {
+    if (!isRecord(toolCall)) {
+      return [];
+    }
+    const toolName = asString(
+      toolCall.tool_name,
+      asString(toolCall.openai_name, "unknown_tool")
+    );
+    return [
+      {
+        id: `tool_${crypto.randomUUID()}`,
+        ...toolCall,
+        tool_name: toolName
+      } as ToolCallTrace
+    ];
+  });
+}
+
+function normalizeSkillInvocations(value: unknown): SkillInvocationTrace[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((skill) => {
+    if (!isRecord(skill) || typeof skill.skill_id !== "string") {
+      return [];
+    }
+    return [
+      {
+        id: `skill_${crypto.randomUUID()}`,
+        skill_id: skill.skill_id,
+        status: asString(skill.status, "loaded"),
+        sequence: typeof skill.sequence === "number" ? skill.sequence : undefined,
+        token_usage: isRecord(skill.token_usage)
+          ? (skill.token_usage as SkillInvocationTrace["token_usage"])
+          : undefined,
+        metadata: isRecord(skill.metadata) ? (skill.metadata as Record<string, unknown>) : undefined
+      }
+    ];
+  });
 }
 
 function normalizeAgentSteps(value: unknown): AgentStepTrace[] {
@@ -292,11 +365,23 @@ function normalizeTranscriptAttachments(value: unknown): MessageAttachment[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.flatMap((attachment, index) => {
-    if (!isRecord(attachment) || attachment.kind !== "image") {
+  return value.flatMap<MessageAttachment>((attachment, index) => {
+    if (!isRecord(attachment) || (attachment.kind !== "image" && attachment.kind !== "pdf")) {
       return [];
     }
     const name = asString(attachment.name, `image-${index + 1}`);
+    if (attachment.kind === "pdf") {
+      return [
+        {
+          id: asString(attachment.id, `attachment_${index}_${name}`),
+          name,
+          kind: "pdf",
+          type: asString(attachment.mime_type, "application/pdf"),
+          size: typeof attachment.size_bytes === "number" ? attachment.size_bytes : 0,
+          status: "ready"
+        }
+      ];
+    }
     const imageUrl = asString(attachment.image_url);
     if (!imageUrl) {
       return [];
@@ -383,7 +468,7 @@ export async function createRun(params: {
   model: string;
   reasoningEffort: string;
   profiles: ProfileInstance[];
-  attachments?: VisionAttachmentInput[];
+  attachments?: RunAttachmentInput[];
   surfacePayload?: Record<string, unknown> | null;
 }): Promise<Run> {
   const response = await fetch(`/api/projects/${params.projectId}/runs`, {
@@ -505,6 +590,27 @@ export async function importSkillFolder(files: FileList): Promise<SkillSummary> 
   return (await response.json()).skill;
 }
 
+export async function updateSkillEnabled(skillId: string, enabled: boolean): Promise<SkillSummary> {
+  const response = await fetch(`/api/skills/${encodeURIComponent(skillId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled })
+  });
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, "更新技能狀態失敗"));
+  }
+  return response.json();
+}
+
+export async function deleteSkill(skillId: string): Promise<void> {
+  const response = await fetch(`/api/skills/${encodeURIComponent(skillId)}`, {
+    method: "DELETE"
+  });
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, "刪除技能失敗"));
+  }
+}
+
 export async function listSubagents(): Promise<SubagentListResponse> {
   const response = await fetch("/api/subagents");
   if (!response.ok) {
@@ -523,6 +629,59 @@ export async function createSubagent(payload: SubagentCreatePayload): Promise<Su
     throw new Error(await responseErrorMessage(response, "新增 Subagent 失敗"));
   }
   return (await response.json()).subagent;
+}
+
+export async function updateSubagentEnabled(
+  subagentId: string,
+  enabled: boolean
+): Promise<SubagentSummary> {
+  const response = await fetch(`/api/subagents/${encodeURIComponent(subagentId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled })
+  });
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, "更新 Subagent 狀態失敗"));
+  }
+  return response.json();
+}
+
+export async function deleteSubagent(subagentId: string): Promise<void> {
+  const response = await fetch(`/api/subagents/${encodeURIComponent(subagentId)}`, {
+    method: "DELETE"
+  });
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, "刪除 Subagent 失敗"));
+  }
+}
+
+export async function listTools(): Promise<ToolListResponse> {
+  const response = await fetch("/api/tools");
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, "載入工具清單失敗"));
+  }
+  return response.json();
+}
+
+export async function updateToolEnabled(toolId: string, enabled: boolean): Promise<ToolSummary> {
+  const response = await fetch(`/api/tools/${encodeURIComponent(toolId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled })
+  });
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, "更新工具狀態失敗"));
+  }
+  return response.json();
+}
+
+export async function deleteTool(toolId: string): Promise<void> {
+  const response = await fetch(`/api/tools/${encodeURIComponent(toolId)}`, {
+    method: "DELETE"
+  });
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, "刪除工具失敗"));
+  }
 }
 
 async function fileToBase64(file: File): Promise<string> {

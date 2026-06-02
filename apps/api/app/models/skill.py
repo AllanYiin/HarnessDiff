@@ -8,6 +8,9 @@ class SkillSummary(BaseModel):
     name: str
     description: str = ""
     version: str = ""
+    enabled: bool = True
+    can_toggle: bool = True
+    can_delete: bool = False
     path: str
 
 
@@ -33,6 +36,27 @@ class SkillImportResponse(BaseModel):
     skill: SkillSummary
 
 
+class SkillUpdateRequest(BaseModel):
+    enabled: bool
+
+
+class ToolSummary(BaseModel):
+    id: str
+    name: str
+    description: str = ""
+    enabled: bool = True
+    can_toggle: bool = True
+    can_delete: bool = True
+
+
+class ToolListResponse(BaseModel):
+    tools: list[ToolSummary]
+
+
+class ToolUpdateRequest(BaseModel):
+    enabled: bool
+
+
 class SubagentSummary(BaseModel):
     id: str = Field(pattern=r"^[A-Za-z0-9_-]+$")
     label: str
@@ -42,6 +66,8 @@ class SubagentSummary(BaseModel):
     max_output_chars: int = 4000
     tools: list[str] = Field(default_factory=list)
     enabled: bool = True
+    can_toggle: bool = True
+    can_delete: bool = True
     path: str
 
 
@@ -64,3 +90,7 @@ class SubagentCreateRequest(BaseModel):
 
 class SubagentCreateResponse(BaseModel):
     subagent: SubagentSummary
+
+
+class SubagentUpdateRequest(BaseModel):
+    enabled: bool

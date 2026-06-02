@@ -12,6 +12,7 @@ from app.routes.projects import router as projects_router
 from app.routes.runs import router as runs_router
 from app.routes.skills import router as skills_router
 from app.routes.subagents import router as subagents_router
+from app.routes.tools import router as tools_router
 from app.providers.base import LLMProvider
 from app.providers.openai_responses import OpenAIResponsesProvider
 from app.services.skill_store import SkillStore
@@ -56,6 +57,7 @@ def create_app(
     app.include_router(runs_router, prefix="/api")
     app.include_router(skills_router, prefix="/api")
     app.include_router(subagents_router, prefix="/api")
+    app.include_router(tools_router, prefix="/api")
 
     return app
 

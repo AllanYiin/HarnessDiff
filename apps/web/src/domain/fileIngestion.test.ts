@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { attachmentPromptBlock, attachmentVisionInputs, ingestFiles } from "./fileIngestion";
+import {
+  attachmentPromptBlock,
+  attachmentRunInputs,
+  attachmentVisionInputs,
+  ingestFiles
+} from "./fileIngestion";
 
 describe("file ingestion", () => {
   it("reads text attachments into prompt context", async () => {
@@ -51,6 +56,24 @@ describe("file ingestion", () => {
     expect(attachments.at(-1)?.url).toBe("blob:image");
     expect(attachments.at(-1)?.dataUrl).toBe("data:image/png;base64,ZmFrZQ==");
     expect(attachmentVisionInputs(attachments)).toEqual([
+      {
+        kind: "image",
+        name: "image.png",
+        mime_type: "image/png",
+        size_bytes: 4,
+        image_url: "data:image/png;base64,ZmFrZQ==",
+        detail: "auto"
+      }
+    ]);
+    expect(attachmentRunInputs(attachments)).toEqual([
+      {
+        kind: "pdf",
+        id: attachments[3].id,
+        name: "paper.pdf",
+        mime_type: "application/pdf",
+        size_bytes: 4,
+        data_base64: "ZmFrZQ=="
+      },
       {
         kind: "image",
         name: "image.png",

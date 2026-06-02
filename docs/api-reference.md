@@ -208,6 +208,14 @@ Request:
       "size_bytes": 1843473,
       "image_url": "data:image/png;base64,...",
       "detail": "auto"
+    },
+    {
+      "kind": "pdf",
+      "id": "pdf_...",
+      "name": "paper.pdf",
+      "mime_type": "application/pdf",
+      "size_bytes": 48012,
+      "data_base64": "JVBERi0x..."
     }
   ],
   "target_panes": ["NoHarness", "Harness"],
@@ -238,7 +246,11 @@ Important fields:
 
 - `prompt`: required
 - `input_mode`: `integrated` or `independent`
-- `attachments`: optional supported image inputs for OpenAI vision; `image_url` must be a data URL or fully qualified URL.
+- `attachments`: optional supported image inputs for OpenAI vision and PDF inputs for local text extraction.
+  - Image attachments use `kind: "image"`; `image_url` must be a data URL or fully qualified URL.
+  - PDF attachments use `kind: "pdf"` and `data_base64` in the create request. The backend extracts text locally, writes run-local text/line/block indexes, and omits raw PDF bytes from stored `run.json` and responses.
+  - For short extracted PDFs, NoHarness receives the full extracted text in prompt context. For longer PDFs, NoHarness receives grep-style line-reading instructions and the `attachment_pdf_grep` / `attachment_pdf_read_lines` tools.
+  - Harness profiles receive Documa-inspired progressive PDF instructions and `attachment_pdf_search_blocks` / `attachment_pdf_read_block(s)` tools, so claims should come from read block content with page refs and block ids.
 - `target_panes`: one or both of `NoHarness`, `Harness`
 - `harness_modules`: optional per-run overrides; merged with `config/harness.default.json`
   - Legacy payloads using `context_manifest` are accepted and normalized to `context_summary`.
@@ -316,6 +328,9 @@ Successful streamed runs write:
 
 ```text
 runs/{run_id}/run.json
+runs/{run_id}/attachments/{attachment_id}.txt
+runs/{run_id}/attachments/{attachment_id}.lines.txt
+runs/{run_id}/attachments/{attachment_id}.blocks.json
 runs/{run_id}/{pane}/input.json
 runs/{run_id}/{pane}/events.jsonl
 runs/{run_id}/{pane}/output.json
@@ -339,7 +354,7 @@ runs/{run_id}/harness_agent/usage.json
 runs/{run_id}/analysis/agent-analysis.json
 ```
 
-Profiles write `tool_names` to `input.json` when tools are available, and successful or failed tool calls are preserved as `tool_call` rows in `events.jsonl`. Harness chat profiles and `Harness Agent` with `tool_policy` enabled include `standard.shell.bash`, `standard.code.container_exec`, `harness.subagent.run`, and `multi_tool_use.parallel`; `NoHarness` and `NoHarness Agent` omit those four while retaining standard web/fs/data tools. `standard.code.container_exec` accepts `command`, optional `workdir`, and optional `timeout_seconds`, then runs the command in an offline Docker container against a temporary repository copy. `harness.subagent.run` accepts `subagent_id`, `task`, and `context`, then returns the subagent result as a normal function tool output.
+Profiles write `tool_names` to `input.json` when tools are available, and successful or failed tool calls are preserved as `tool_call` rows in `events.jsonl`. Harness chat profiles and `Harness Agent` with `tool_policy` enabled include `standard.shell.bash`, `standard.code.container_exec`, `harness.subagent.run`, and `multi_tool_use.parallel`; `NoHarness` and `NoHarness Agent` omit those four while retaining standard web/fs/data tools. PDF tools are attached per profile: NoHarness gets grep/line tools for long PDFs, while Harness gets progressive block search/read tools. `standard.code.container_exec` accepts `command`, optional `workdir`, and optional `timeout_seconds`, then runs the command in an offline Docker container against a temporary repository copy. `harness.subagent.run` accepts `subagent_id`, `task`, and `context`, then returns the subagent result as a normal function tool output.
 
 Subagent definitions are loaded from `~/.harnessdiff/agents/` when `harness.subagent.run` is invoked. Subagent instances are ephemeral and do not keep live state after the tool call, but their artifacts and token usage remain on disk. Definitions may include `tools: WebSearch, WebFetch` to let that subagent use only the mapped standard web search/fetch tools during its provider request; definitions without `tools:` still run with tools disabled. Subagent tool calls additionally write:
 

@@ -1,4 +1,4 @@
-import type { AnalysisDocument, ProfileAnalysis } from "../api";
+import type { AnalysisDocument, HarnessDecisionTrace, ProfileAnalysis } from "../api";
 
 type AnalysisSummaryProps = {
   turnCount: number;
@@ -29,11 +29,14 @@ export function AnalysisSummary({ turnCount, inputMode, running, analysis }: Ana
         <span>{summary}</span>
       </div>
       {analysis ? (
-        <div className="analysisMetrics" aria-label="Token and context metrics">
-          {profiles.map((profile) => (
-            <Metric key={profile.profile_id} profile={profile} />
-          ))}
-          <span>Turn {analysis.turn_index + 1}</span>
+        <div className="analysisAside">
+          <div className="analysisMetrics" aria-label="Token and context metrics">
+            {profiles.map((profile) => (
+              <Metric key={profile.profile_id} profile={profile} />
+            ))}
+            <span>Turn {analysis.turn_index + 1}</span>
+          </div>
+          <RiskSignals profiles={profiles} />
         </div>
       ) : null}
     </aside>
@@ -60,6 +63,74 @@ function Metric({ profile }: { profile: ProfileAnalysis }) {
   );
 }
 
+function RiskSignals({ profiles }: { profiles: ProfileAnalysis[] }) {
+  const signals = profiles.flatMap((profile) =>
+    extractRiskSignals(profile).map((signal) => ({
+      ...signal,
+      profileLabel: profile.profile_label
+    }))
+  );
+  if (signals.length === 0) {
+    return null;
+  }
+  return (
+    <div className="riskSignals" aria-label="Harness risk preflight signals">
+      {signals.slice(0, 4).map((signal) => (
+        <span key={`${signal.profileLabel}-${signal.kind}`}>
+          {signal.profileLabel} {signal.label} {signal.count}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function extractRiskSignals(profile: ProfileAnalysis) {
+  const decisions = flattenDecisions(profile.harness_decisions ?? []);
+  const counters = new Map<string, { label: string; count: number }>();
+  decisions.forEach((decision) => {
+    const reason = decision.reason ?? {};
+    addSignal(counters, "missing_context", "missing", countItems(reason.missing_context));
+    addSignal(counters, "scanner_coverage_gaps", "coverage", countItems(reason.scanner_coverage_gaps));
+    addSignal(counters, "scanner_findings", "scanner", countItems(reason.scanner_findings));
+    addSignal(counters, "similarity_matches", "similarity", countItems(reason.similarity_matches));
+    addSignal(counters, "claim_gaps", "claims", countItems(reason.claim_gaps));
+    addSignal(counters, "offer_disclosure_gaps", "offers", countItems(reason.offer_disclosure_gaps));
+    addSignal(counters, "provenance_gaps", "provenance", countItems(reason.provenance_gaps));
+    addSignal(counters, "provenance_findings", "prov findings", countItems(reason.provenance_findings));
+    addSignal(counters, "rollback_constraints", "rollback", countItems(reason.rollback_constraints));
+  });
+  return Array.from(counters, ([kind, value]) => ({ kind, ...value })).filter(
+    (signal) => signal.count > 0
+  );
+}
+
+function flattenDecisions(decisions: HarnessDecisionTrace[]): HarnessDecisionTrace[] {
+  return decisions.flatMap((decision) => [
+    decision,
+    ...flattenDecisions(decision.contributing_decisions ?? [])
+  ]);
+}
+
+function addSignal(
+  counters: Map<string, { label: string; count: number }>,
+  key: string,
+  label: string,
+  count: number
+) {
+  if (count <= 0) {
+    return;
+  }
+  const current = counters.get(key);
+  counters.set(key, { label, count: (current?.count ?? 0) + count });
+}
+
+function countItems(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.length;
+  }
+  return value ? 1 : 0;
+}
+
 function asNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
@@ -70,3 +141,4 @@ function formatSigned(value: number) {
   }
   return `${value}`;
 }
+

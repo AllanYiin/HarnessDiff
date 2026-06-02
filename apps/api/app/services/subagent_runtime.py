@@ -86,6 +86,7 @@ class SubagentToolRuntime:
         profile: ProfileConfig,
         definitions: tuple[SubagentDefinition, ...] = DEFAULT_SUBAGENTS,
         standard_runtime: ToolAnythingRuntime | None = None,
+        excluded_tool_names: tuple[str, ...] = (),
     ) -> None:
         self.provider = provider
         self.store = store
@@ -93,6 +94,7 @@ class SubagentToolRuntime:
         self.profile = profile
         self.definitions = definitions
         self.standard_runtime = standard_runtime
+        self.excluded_tool_names = set(excluded_tool_names)
 
     async def invoke(
         self, openai_name: str, arguments: dict[str, Any]
@@ -266,6 +268,7 @@ class SubagentToolRuntime:
             tool_name
             for tool_name in definition.tools
             if tool_name in self.standard_runtime.list_tool_names()
+            and tool_name not in self.excluded_tool_names
         )
         if not allowed:
             return None

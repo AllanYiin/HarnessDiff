@@ -3,6 +3,9 @@ import type { SkillDetail, SkillSummary } from "../api";
 export function parseSkillCommandIds(text: string, skills: SkillSummary[]): string[] {
   const aliases = new Map<string, string>();
   skills.forEach((skill) => {
+    if (!skill.enabled) {
+      return;
+    }
     aliases.set(skill.id.toLowerCase(), skill.id);
     aliases.set(skill.name.toLowerCase(), skill.id);
   });
@@ -32,4 +35,3 @@ export function skillDetailsPromptBlock(details: SkillDetail[]): string {
   );
   return ["", "---", "Requested skill details:", ...blocks, "---"].join("\n");
 }
-
