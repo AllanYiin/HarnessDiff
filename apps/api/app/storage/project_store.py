@@ -106,11 +106,21 @@ class ProjectStore:
         run_id = self._new_run_id(runs_dir)
         run_dir = runs_dir / run_id
         run_dir.mkdir(parents=True, exist_ok=False)
-        if payload.attachments:
+        attachments = list(payload.attachments)
+        if not _has_pdf_attachment(attachments):
+            attachments.extend(
+                self._inherit_pdf_attachments(
+                    project_id,
+                    before_turn_index=turn_index,
+                    run_dir=run_dir,
+                    existing_attachments=attachments,
+                )
+            )
+        if attachments:
             payload = payload.model_copy(
                 update={
                     "attachments": prepare_pdf_attachments(
-                        list(payload.attachments),
+                        attachments,
                         run_dir=run_dir,
                     )
                 }
@@ -125,6 +135,62 @@ class ProjectStore:
         )
         write_json_atomic(run_dir / "run.json", run.model_dump(mode="json"))
         return run
+
+    def _inherit_pdf_attachments(
+        self,
+        project_id: str,
+        *,
+        before_turn_index: int,
+        run_dir: Path,
+        existing_attachments: list[Any],
+    ) -> list[Any]:
+        existing_ids = {
+            attachment.id
+            for attachment in existing_attachments
+            if getattr(attachment, "kind", "") == "pdf" and getattr(attachment, "id", None)
+        }
+        for previous_run_dir in reversed(self.list_run_dirs(project_id)):
+            run_path = previous_run_dir / "run.json"
+            if not run_path.exists():
+                continue
+            previous_run = RunDocument.model_validate(read_json(run_path))
+            if (
+                previous_run.turn_index >= before_turn_index
+                or previous_run.status != RunStatus.completed
+            ):
+                continue
+            inherited: list[Any] = []
+            for attachment in previous_run.attachments:
+                if attachment.kind != "pdf" or not attachment.id or attachment.id in existing_ids:
+                    continue
+                copied = self._copy_pdf_attachment_indexes(previous_run_dir, run_dir, attachment)
+                if copied is not None:
+                    inherited.append(copied)
+                    existing_ids.add(attachment.id)
+            if inherited:
+                return inherited
+        return []
+
+    def _copy_pdf_attachment_indexes(
+        self, previous_run_dir: Path, run_dir: Path, attachment: Any
+    ) -> Any | None:
+        updates: dict[str, Any] = {"data_base64": None}
+        for field_name in ("text_path", "line_index_path", "block_index_path"):
+            relative_path = getattr(attachment, field_name, None)
+            if not relative_path:
+                return None
+            source = _safe_run_relative_path(previous_run_dir, relative_path)
+            if source is None:
+                return None
+            if not source.exists():
+                return None
+            target = _safe_run_relative_path(run_dir, relative_path)
+            if target is None:
+                return None
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+            updates[field_name] = Path(relative_path).as_posix()
+        return attachment.model_copy(update=updates)
 
     def get_run(self, run_id: str) -> RunDocument:
         run_path = self._find_run_path(run_id)
@@ -703,3 +769,16 @@ class ProjectStore:
         ):
             return default_agent_profiles()
         return list(payload.profiles)
+
+
+def _has_pdf_attachment(attachments: list[Any]) -> bool:
+    return any(getattr(attachment, "kind", "") == "pdf" for attachment in attachments)
+
+
+def _safe_run_relative_path(run_dir: Path, relative_path: str) -> Path | None:
+    path = (run_dir / relative_path).resolve()
+    try:
+        path.relative_to(run_dir.resolve())
+    except ValueError:
+        return None
+    return path

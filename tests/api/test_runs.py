@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from collections.abc import AsyncIterator
 
@@ -1191,6 +1192,73 @@ def test_run_stream_passes_image_attachments_to_provider(tmp_path) -> None:
     ]
 
 
+def test_pdf_attachments_are_inherited_across_chat_turns(tmp_path) -> None:
+    provider = FakeProvider()
+    client = TestClient(
+        create_app(data_dir=tmp_path, harnessdiff_home=tmp_path / ".harnessdiff", llm_provider=provider)
+    )
+    project_id = client.post("/api/projects", json={"name": "PDF chat"}).json()["id"]
+
+    first_response = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "What does the PDF say about the needle?",
+            "input_mode": "integrated",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+            "attachments": [
+                {
+                    "kind": "pdf",
+                    "id": "paper",
+                    "name": "paper.pdf",
+                    "mime_type": "application/pdf",
+                    "size_bytes": len(_minimal_pdf_bytes()),
+                    "data_base64": base64.b64encode(_minimal_pdf_bytes()).decode("ascii"),
+                }
+            ],
+        },
+    )
+    assert first_response.status_code == 201
+    first_run = first_response.json()
+    with client.stream("GET", f"/api/runs/{first_run['id']}/stream") as response:
+        assert response.status_code == 200
+        _sse_events("".join(response.iter_text()))
+
+    second_response = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "Find the exact supporting location again.",
+            "input_mode": "integrated",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+        },
+    )
+    assert second_response.status_code == 201
+    second_run = second_response.json()
+    with client.stream("GET", f"/api/runs/{second_run['id']}/stream") as response:
+        assert response.status_code == 200
+        _sse_events("".join(response.iter_text()))
+
+    second_run_dir = tmp_path / "projects" / project_id / "runs" / second_run["id"]
+    second_run_doc = json.loads((second_run_dir / "run.json").read_text(encoding="utf-8"))
+    assert second_run_doc["attachments"][0]["id"] == "paper"
+    assert (second_run_dir / "attachments" / "paper.blocks.json").exists()
+
+    harness_input = json.loads(
+        (second_run_dir / "harness" / "input.json").read_text(encoding="utf-8")
+    )
+    assert "reading_mode: progressive_blocks" in harness_input["prompt"]
+    assert "attachment.pdf.search_blocks" in harness_input["tool_names"]
+    assert "attachment.pdf.read_block" in harness_input["tool_names"]
+    assert "attachment.pdf.read_blocks" in harness_input["tool_names"]
+
+    baseline_input = json.loads(
+        (second_run_dir / "baseline" / "input.json").read_text(encoding="utf-8")
+    )
+    assert "attachment.pdf.grep" in baseline_input["tool_names"]
+    assert "attachment.pdf.read_lines" in baseline_input["tool_names"]
+
+
 def test_harness_subagent_tool_call_writes_artifacts_and_usage_rollup(tmp_path) -> None:
     openai_client = FakeOpenAIClient(
         [
@@ -1598,6 +1666,32 @@ def test_run_routes_reject_invalid_or_missing_ids(tmp_path) -> None:
     assert client.get("/api/runs/../bad/stream").status_code == 404
     assert client.get("/api/runs/bad$id/stream").status_code == 400
     assert client.get("/api/runs/run_missing/analysis").status_code == 404
+
+
+def _minimal_pdf_bytes() -> bytes:
+    return (
+        b"%PDF-1.4\n"
+        b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
+        b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n"
+        b"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj\n"
+        b"4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n"
+        b"5 0 obj << /Length 53 >> stream\n"
+        b"BT /F1 12 Tf 72 720 Td (HarnessDiff PDF needle) Tj ET\n"
+        b"endstream endobj\n"
+        b"xref\n"
+        b"0 6\n"
+        b"0000000000 65535 f \n"
+        b"0000000009 00000 n \n"
+        b"0000000058 00000 n \n"
+        b"0000000115 00000 n \n"
+        b"0000000241 00000 n \n"
+        b"0000000311 00000 n \n"
+        b"trailer << /Root 1 0 R /Size 6 >>\n"
+        b"startxref\n"
+        b"405\n"
+        b"%%EOF"
+    )
 
 
 class FakeEvent:
