@@ -323,10 +323,12 @@ def test_agent_tool_policy_keeps_high_risk_tools_harness_only(tmp_path) -> None:
     assert "standard.code.container_exec" not in baseline_tools
     assert "harness.subagent.run" not in baseline_tools
     assert "multi_tool_use.parallel" not in baseline_tools
+    assert "skill_routing_review" not in baseline_tools
     assert "standard.shell.bash" in harness_tools
     assert "standard.code.container_exec" in harness_tools
     assert "harness.subagent.run" in harness_tools
     assert "multi_tool_use.parallel" in harness_tools
+    assert "skill_routing_review" in harness_tools
 
 
 def test_agent_tool_call_is_recorded_as_step_trace(tmp_path) -> None:

@@ -876,6 +876,8 @@ def _tool_description(tool_name: str) -> str:
         return "Delegate a focused task to an enabled HarnessDiff subagent."
     if tool_name == "multi_tool_use.parallel":
         return "Run multiple currently allowed HarnessDiff tools concurrently."
+    if tool_name == "skill_routing_review":
+        return "Review HarnessDiff skill routing and return the fixed Harnessable JSON contract."
     if tool_name.startswith("standard.web."):
         return "Web access and extraction tool."
     if tool_name.startswith("standard.fs."):

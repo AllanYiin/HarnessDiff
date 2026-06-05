@@ -20,10 +20,17 @@ from app.services.run_orchestrator import (
     NO_HARNESS_EXCLUDED_TOOL_NAMES,
     RunOrchestrator,
     _event_to_payload,
+    _profile_has_harness_context,
     _prompt_cache_key,
+    _skill_selection_policy_for_profile,
 )
 from app.services.subagent_definitions import DEFAULT_SUBAGENTS
 from app.services.subagent_runtime import SUBAGENT_TOOL_NAME, SubagentToolRuntime
+from app.services.skill_store import SKILL_METADATA_BUDGET_CHARS
+from app.services.skill_routing_review import (
+    SKILL_ROUTING_REVIEW_TOOL_NAME,
+    SkillRoutingReviewRuntime,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -40,10 +47,6 @@ class AgentRunOrchestrator(RunOrchestrator):
         self.store.update_run_status(run.project_id, run.id, RunStatus.running)
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         profile_errors: list[dict[str, Any]] = []
-        selected_skills = await self._select_skills_for_run(run)
-        selected_skill_ids = tuple(skill.skill_id for skill in selected_skills)
-        selected_skill_metadata = {skill.skill_id: skill.event_metadata() for skill in selected_skills}
-        skill_token_usage = self._skill_token_usage(selected_skill_ids)
         run_dir = self.store.get_run_dir(run.project_id, run.id)
 
         async def run_profile(profile) -> None:
@@ -64,9 +67,23 @@ class AgentRunOrchestrator(RunOrchestrator):
                     run,
                     profile.label,
                 )
-                has_harness_context = any(
-                    bool(enabled) for enabled in profile.harness_modules.values()
+                has_harness_context = _profile_has_harness_context(profile)
+                selected_skills = await self._select_skills_for_profile(run, profile)
+                selected_skill_ids = tuple(skill.skill_id for skill in selected_skills)
+                selected_skill_metadata = {
+                    skill.skill_id: skill.event_metadata() for skill in selected_skills
+                }
+                skill_context_gate = self.control_plane.evaluate_skill_context_assembly(
+                    run,
+                    profile,
+                    selection_policy=_skill_selection_policy_for_profile(profile),
+                    candidate_count=len(self.skill_store.skill_selection_candidates())
+                    if self.skill_store is not None
+                    else 0,
+                    selected_skills=selected_skills,
+                    metadata_budget_chars=SKILL_METADATA_BUDGET_CHARS,
                 )
+                skill_token_usage = self._skill_token_usage(selected_skill_ids)
                 pdf_context = build_pdf_context_prompt(
                     attachments=tuple(run.attachments),
                     run_dir=run_dir,
@@ -129,6 +146,17 @@ class AgentRunOrchestrator(RunOrchestrator):
                             attachments=tuple(run.attachments),
                             mode="harness" if has_harness_context else "grep",
                         ),
+                        skill_routing_review_runtime=(
+                            SkillRoutingReviewRuntime(
+                                skill_store=self.skill_store,
+                                task_text=run.prompt,
+                                selected_skill_ids=selected_skill_ids,
+                            )
+                            if has_full_tools
+                            and self.skill_store is not None
+                            and SKILL_ROUTING_REVIEW_TOOL_NAME not in globally_excluded_tools
+                            else None
+                        ),
                     )
                     if self.tool_runtime is not None
                     else None
@@ -174,6 +202,12 @@ class AgentRunOrchestrator(RunOrchestrator):
                     status="completed",
                     elapsed_ms=_elapsed_ms(profile_started),
                 )
+                decision_sequence = 0
+                for sequence, decision in enumerate(skill_context_gate.decisions):
+                    self.store.append_harness_decision_event(
+                        run.project_id, run.id, profile.id, sequence, decision
+                    )
+                    decision_sequence = sequence + 1
                 for sequence, skill_id in enumerate(selected_skill_ids):
                     token_usage = skill_token_usage.get(skill_id, {})
                     metadata = dict(selected_skill_metadata.get(skill_id, {}))
@@ -203,7 +237,7 @@ class AgentRunOrchestrator(RunOrchestrator):
                 gate = self.control_plane.evaluate_before_provider(run, profile, instructions)
                 for sequence, decision in enumerate(gate.decisions):
                     self.store.append_harness_decision_event(
-                        run.project_id, run.id, profile.id, sequence, decision
+                        run.project_id, run.id, profile.id, decision_sequence + sequence, decision
                     )
                 if not gate.allowed:
                     blocking = gate.blocking_decision or {}

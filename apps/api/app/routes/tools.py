@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Request, Response, status
 
 from app.models.skill import ToolListResponse, ToolSummary, ToolUpdateRequest
 from app.services.chat_tool_runtime import PARALLEL_TOOL_NAME
+from app.services.skill_routing_review import SKILL_ROUTING_REVIEW_TOOL_NAME
 from app.services.skill_store import SkillStore, ToolManagementError
 from app.services.subagent_runtime import SUBAGENT_TOOL_NAME
 from app.services.tool_runtime import ALLOWED_TOOL_NAMES
@@ -22,7 +23,11 @@ def available_tool_names(request: Request) -> tuple[str, ...]:
         if tool_runtime is not None and hasattr(tool_runtime, "list_tool_names")
         else ALLOWED_TOOL_NAMES
     )
-    return tuple(dict.fromkeys((*names, SUBAGENT_TOOL_NAME, PARALLEL_TOOL_NAME)))
+    return tuple(
+        dict.fromkeys(
+            (*names, SUBAGENT_TOOL_NAME, PARALLEL_TOOL_NAME, SKILL_ROUTING_REVIEW_TOOL_NAME)
+        )
+    )
 
 
 @router.get("", response_model=ToolListResponse)

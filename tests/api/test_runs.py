@@ -62,14 +62,18 @@ class FakeProvider(LLMProvider):
 
 
 class SkillSelectingProvider(FakeProvider):
-    def __init__(self, selected_skill_ids: tuple[str, ...]) -> None:
+    def __init__(self, selected_skill_ids: tuple[str, ...] | dict[str, tuple[str, ...]]) -> None:
         super().__init__()
         self.selected_skill_ids = selected_skill_ids
         self.skill_selection_requests: list[SkillSelectionRequest] = []
 
     async def select_skills(self, request: SkillSelectionRequest) -> SkillSelectionResult:
         self.skill_selection_requests.append(request)
-        return SkillSelectionResult(selected_skill_ids=self.selected_skill_ids, source="llm")
+        if isinstance(self.selected_skill_ids, dict):
+            selected = self.selected_skill_ids.get(request.profile_id, ())
+        else:
+            selected = self.selected_skill_ids
+        return SkillSelectionResult(selected_skill_ids=selected, source="llm")
 
 
 class FailingHarnessProvider(FakeProvider):
@@ -177,12 +181,14 @@ def test_run_stream_writes_profile_outputs_usage_and_harnessable_trace(tmp_path)
     assert "standard_code_container_exec" not in baseline_openai_tools
     assert "harness_subagent_run" not in baseline_openai_tools
     assert "multi_tool_use_parallel" not in baseline_openai_tools
+    assert "skill_routing_review" not in baseline_openai_tools
     assert harness_openai_tool_names[0] == "standard_shell_bash"
     assert harness_openai_tool_names[1] == "standard_code_container_exec"
     assert "standard_shell_bash" in harness_openai_tools
     assert "standard_code_container_exec" in harness_openai_tools
     assert "harness_subagent_run" in harness_openai_tools
     assert "multi_tool_use_parallel" in harness_openai_tools
+    assert "skill_routing_review" in harness_openai_tools
     assert "Sources" not in requests_by_profile["baseline"].instructions
     assert "Sources" in requests_by_profile["harness"].instructions
     assert "Consequence Gate" in requests_by_profile["harness"].instructions
@@ -205,6 +211,7 @@ def test_run_stream_writes_profile_outputs_usage_and_harnessable_trace(tmp_path)
     assert "standard.code.container_exec" not in baseline_input["tool_names"]
     assert "harness.subagent.run" not in baseline_input["tool_names"]
     assert "multi_tool_use.parallel" not in baseline_input["tool_names"]
+    assert "skill_routing_review" not in baseline_input["tool_names"]
     assert "standard.fs.read" not in harness_input["tool_names"]
     assert "standard.fs.grep" in harness_input["tool_names"]
     assert harness_input["tool_names"][0] == "standard.shell.bash"
@@ -213,6 +220,7 @@ def test_run_stream_writes_profile_outputs_usage_and_harnessable_trace(tmp_path)
     assert "standard.code.container_exec" in harness_input["tool_names"]
     assert "harness.subagent.run" in harness_input["tool_names"]
     assert "multi_tool_use.parallel" in harness_input["tool_names"]
+    assert "skill_routing_review" in harness_input["tool_names"]
     assert harness_input["harness_modules"]["consequence_gate"] is True
 
     analysis = client.get(f"/api/runs/{run['id']}/analysis")
@@ -598,7 +606,11 @@ def test_llm_skill_selector_is_used_before_deterministic_fallback(tmp_path) -> N
         assert response.status_code == 200
         _ = "".join(response.iter_text())
 
-    assert len(provider.skill_selection_requests) == 1
+    assert len(provider.skill_selection_requests) == 2
+    assert {request.profile_id for request in provider.skill_selection_requests} == {
+        "baseline",
+        "harness",
+    }
     selection_request = provider.skill_selection_requests[0]
     assert selection_request.prompt == "這段話 AI 味太重，幫我改自然一點。"
     assert selection_request.skills == (
@@ -608,7 +620,79 @@ def test_llm_skill_selector_is_used_before_deterministic_fallback(tmp_path) -> N
             "description": "Rewrite user-provided copy into a natural human voice.",
         },
     )
+    assert {
+        request.selection_policy for request in provider.skill_selection_requests
+    } == {"llm_only", "llm_with_deterministic_fallback"}
     assert all("# Humanize workflow" in request.instructions for request in provider.requests)
+
+
+def test_integrated_run_selects_skills_independently_per_profile(tmp_path) -> None:
+    home = tmp_path / "home"
+    baseline_skill_dir = home / "skills" / "plain-editor"
+    baseline_skill_dir.mkdir(parents=True)
+    (baseline_skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: plain-editor\n"
+        "description: Edit text without tool access.\n"
+        "---\n"
+        "# Plain workflow\n",
+        encoding="utf-8",
+    )
+    harness_skill_dir = home / "skills" / "repo-inspector"
+    harness_skill_dir.mkdir(parents=True)
+    (harness_skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: repo-inspector\n"
+        "description: Inspect repositories with tools.\n"
+        "---\n"
+        "# Repo workflow\n",
+        encoding="utf-8",
+    )
+    provider = SkillSelectingProvider(
+        {
+            "baseline": ("plain-editor",),
+            "harness": ("repo-inspector",),
+        }
+    )
+    client = TestClient(
+        create_app(data_dir=tmp_path / "data", harnessdiff_home=home, llm_provider=provider)
+    )
+    project_id = client.post("/api/projects", json={"name": "Profile skill selector"}).json()["id"]
+
+    run = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "請依 pane 能力選合適技能。",
+            "input_mode": "integrated",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+            "profiles": [
+                {"id": "baseline", "label": "NoHarness", "harness_modules": {}},
+                {"id": "harness", "label": "Harness", "harness_modules": {"tool_policy": True}},
+            ],
+        },
+    ).json()
+    with client.stream("GET", f"/api/runs/{run['id']}/stream") as response:
+        assert response.status_code == 200
+        events = _sse_events("".join(response.iter_text()))
+
+    provider_requests_by_profile = {request.profile_id: request for request in provider.requests}
+    assert "# Plain workflow" in provider_requests_by_profile["baseline"].instructions
+    assert "# Repo workflow" not in provider_requests_by_profile["baseline"].instructions
+    assert "# Repo workflow" in provider_requests_by_profile["harness"].instructions
+    assert "# Plain workflow" not in provider_requests_by_profile["harness"].instructions
+    assert any(
+        event["type"] == "skill_invocation"
+        and event["profile_id"] == "baseline"
+        and event["skill_id"] == "plain-editor"
+        for event in events
+    )
+    assert any(
+        event["type"] == "skill_invocation"
+        and event["profile_id"] == "harness"
+        and event["skill_id"] == "repo-inspector"
+        for event in events
+    )
 
 
 def test_explicit_dollar_skill_invocation_takes_priority_over_llm_selection(tmp_path) -> None:
@@ -738,15 +822,26 @@ def test_deterministic_skill_match_is_used_when_llm_selector_returns_empty(tmp_p
         assert response.status_code == 200
         events = _sse_events("".join(response.iter_text()))
 
-    assert len(provider.skill_selection_requests) == 1
-    assert all("# Earnings workflow" in request.instructions for request in provider.requests)
+    assert len(provider.skill_selection_requests) == 2
+    requests_by_profile = {request.profile_id: request for request in provider.skill_selection_requests}
+    assert requests_by_profile["baseline"].selection_policy == "llm_only"
+    assert requests_by_profile["harness"].selection_policy == "llm_with_deterministic_fallback"
+    provider_requests_by_profile = {request.profile_id: request for request in provider.requests}
+    assert "# Earnings workflow" not in provider_requests_by_profile["baseline"].instructions
+    assert "# Earnings workflow" in provider_requests_by_profile["harness"].instructions
     assert any(
         event["type"] == "skill_invocation"
-        and event["profile_id"] == "baseline"
+        and event["profile_id"] == "harness"
         and event["skill_id"] == "earnings-call-interpretation"
         and event["status"] == "loaded"
         and event["token_usage"]["source"] == "estimated"
         and event["token_usage"]["total_tokens"] > 0
+        for event in events
+    )
+    assert not any(
+        event["type"] == "skill_invocation"
+        and event["profile_id"] == "baseline"
+        and event["skill_id"] == "earnings-call-interpretation"
         for event in events
     )
     analysis = client.get(f"/api/runs/{run['id']}/analysis").json()
@@ -754,18 +849,97 @@ def test_deterministic_skill_match_is_used_when_llm_selector_returns_empty(tmp_p
     activated_skills = next(
         section for section in baseline_sections if section["key"] == "activated_skills"
     )
-    assert activated_skills["status"] == "sent"
-    assert activated_skills["characters"] > 0
-    assert "skills" in analysis["profiles"]["baseline"]["provider_context_keys"]
+    assert activated_skills["status"] == "not_configured"
+    assert activated_skills["characters"] == 0
+    assert "skills" not in analysis["profiles"]["baseline"]["provider_context_keys"]
     run_dir = tmp_path / "data" / "projects" / project_id / "runs" / run["id"]
     baseline_events = [
         json.loads(line)
         for line in (run_dir / "baseline" / "events.jsonl").read_text(encoding="utf-8").splitlines()
     ]
-    assert any(
+    harness_events = [
+        json.loads(line)
+        for line in (run_dir / "harness" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert not any(
         event["type"] == "skill_invocation"
         and event["skill_id"] == "earnings-call-interpretation"
         for event in baseline_events
+    )
+    assert any(
+        event["type"] == "skill_invocation"
+        and event["skill_id"] == "earnings-call-interpretation"
+        for event in harness_events
+    )
+
+
+def test_harness_skill_loading_records_context_assembly_trace(tmp_path) -> None:
+    home = tmp_path / "home"
+    skill_dir = home / "skills" / "invoice-helper"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: invoice-helper\n"
+        "description: Use when the user asks to summarize invoices or extract invoice totals.\n"
+        "---\n"
+        "# Invoice workflow\n"
+        "Always use the invoice workflow sentinel.\n",
+        encoding="utf-8",
+    )
+    provider = SkillSelectingProvider(())
+    client = TestClient(
+        create_app(data_dir=tmp_path / "data", harnessdiff_home=home, llm_provider=provider)
+    )
+    project_id = client.post("/api/projects", json={"name": "Harness skill trace"}).json()["id"]
+
+    run = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "Please summarize invoice totals.",
+            "input_mode": "integrated",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+            "profiles": [
+                {"id": "baseline", "label": "NoHarness", "harness_modules": {}},
+                {"id": "harness", "label": "Harness", "harness_modules": {"tool_policy": True}},
+            ],
+        },
+    ).json()
+    with client.stream("GET", f"/api/runs/{run['id']}/stream") as response:
+        assert response.status_code == 200
+        _ = "".join(response.iter_text())
+
+    requests_by_profile = {request.profile_id: request for request in provider.requests}
+    assert "Always use the invoice workflow sentinel." not in requests_by_profile["baseline"].instructions
+    assert "Always use the invoice workflow sentinel." in requests_by_profile["harness"].instructions
+
+    run_dir = tmp_path / "data" / "projects" / project_id / "runs" / run["id"]
+    baseline_events = [
+        json.loads(line)
+        for line in (run_dir / "baseline" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    harness_events = [
+        json.loads(line)
+        for line in (run_dir / "harness" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert not any(event.get("type") == "harness_decision" for event in baseline_events)
+    context_decisions = [
+        event["harness_decision"]
+        for event in harness_events
+        if event.get("type") == "harness_decision"
+        and event.get("harness_decision", {}).get("event_type")
+        in {"CONTEXT_ASSEMBLY_REQUESTED", "CONTEXT_ASSEMBLED"}
+    ]
+    assert [decision["event_type"] for decision in context_decisions] == [
+        "CONTEXT_ASSEMBLY_REQUESTED",
+        "CONTEXT_ASSEMBLED",
+    ]
+    assembled = context_decisions[-1]
+    assert assembled["event_payload"]["metadata_only_selector"] is True
+    assert assembled["event_payload"]["full_skill_hydration"] == "after_selection"
+    assert assembled["event_payload"]["selected_skill_ids"] == ["invoice-helper"]
+    assert "Always use the invoice workflow sentinel." not in json.dumps(
+        assembled["event_payload"], ensure_ascii=False
     )
 
 

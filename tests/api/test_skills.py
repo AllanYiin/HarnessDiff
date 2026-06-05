@@ -294,6 +294,7 @@ def test_tool_management_api_toggles_and_deletes_tools(tmp_path) -> None:
         "standard.fs.grep",
         "harness.subagent.run",
         "multi_tool_use.parallel",
+        "skill_routing_review",
     ]
 
     disabled = client.patch("/api/tools/standard.web.search", json={"enabled": False})

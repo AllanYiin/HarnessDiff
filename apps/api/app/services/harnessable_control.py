@@ -202,6 +202,98 @@ class HarnessableControlPlane:
             decisions=decisions,
         )
 
+    def evaluate_skill_context_assembly(
+        self,
+        run: RunDocument,
+        profile: ProfileConfig,
+        *,
+        selection_policy: str,
+        candidate_count: int,
+        selected_skills: tuple[Any, ...],
+        metadata_budget_chars: int,
+    ) -> HarnessableGateResult:
+        if not self.applies_to(profile):
+            return HarnessableGateResult()
+        if not self.available:
+            return HarnessableGateResult(
+                decisions=[
+                    {
+                        "event_type": "HARNESSABLE_UNAVAILABLE",
+                        "effect": "ALLOW",
+                        "reason": {"code": "HARNESSABLE_IMPORT_UNAVAILABLE"},
+                    }
+                ]
+            )
+        if not self._event_type_supported("CONTEXT_ASSEMBLY_REQUESTED") or not self._event_type_supported(
+            "CONTEXT_ASSEMBLED"
+        ):
+            return HarnessableGateResult(
+                decisions=[
+                    {
+                        "event_type": "CONTEXT_ASSEMBLY_UNSUPPORTED",
+                        "effect": "ALLOW",
+                        "reason": {"code": "HARNESSABLE_CONTEXT_ASSEMBLY_EVENT_UNAVAILABLE"},
+                    }
+                ]
+            )
+
+        capability = {
+            "type": "RESOURCE",
+            "id": "context.skill_assembly",
+            "compatibility_class": "skill",
+            "supports": ["metadata_selection", "progressive_hydration", "budget_events"],
+        }
+        selected_payload = [
+            {
+                "id": skill.skill_id,
+                "source": skill.source,
+                "reason": skill.reason,
+                "score": skill.score,
+                "load_policy": skill.load_policy,
+                "required_tools": list(skill.required_tools),
+                "allowed_tools": list(skill.allowed_tools),
+                "priority": skill.priority,
+            }
+            for skill in selected_skills
+        ]
+        request_payload = {
+            "selection_policy": selection_policy,
+            "candidate_count": candidate_count,
+            "max_selected": 3,
+            "metadata_budget_chars": metadata_budget_chars,
+            "metadata_only_selector": True,
+            "full_skill_hydration": "after_selection",
+        }
+        decisions = [
+            self._emit(
+                event_type="CONTEXT_ASSEMBLY_REQUESTED",
+                run=run,
+                profile=profile,
+                payload=request_payload,
+                hook_point="before_context_assembly",
+                capability=capability,
+                include_event_payload=True,
+            ),
+            self._emit(
+                event_type="CONTEXT_ASSEMBLED",
+                run=run,
+                profile=profile,
+                payload={
+                    **request_payload,
+                    "selected_skill_ids": [skill["id"] for skill in selected_payload],
+                    "selected_skills": selected_payload,
+                    "hydrated_skill_count": len(selected_payload),
+                },
+                hook_point="after_context_assembly",
+                capability=capability,
+                include_event_payload=True,
+            ),
+        ]
+        return HarnessableGateResult(
+            allowed=all(decision["effect"] not in BLOCKING_EFFECTS for decision in decisions),
+            decisions=decisions,
+        )
+
     def _load_harnessable(self) -> None:
         _ensure_harnessable_import_path()
         try:
@@ -356,6 +448,7 @@ class HarnessableControlPlane:
         payload: dict[str, Any],
         hook_point: str,
         capability: dict[str, Any] | None = None,
+        include_event_payload: bool = False,
     ) -> dict[str, Any]:
         assert self.kernel is not None
         EventType = self._imports["EventType"]
@@ -379,16 +472,30 @@ class HarnessableControlPlane:
         )
         decision = self.kernel.emit(event)
         decision_doc = decision.to_dict()
-        return {
+        result = {
             "event_type": event_type,
             "event_id": event.event_id,
             "decision_id": decision_doc.get("decision_id"),
-            "rule_id": decision_doc.get("rule_id"),
+            "rule_id": decision_doc.get("rule_id") or "",
             "effect": decision_doc.get("effect"),
             "reason": decision_doc.get("reason", {}),
             "telemetry": decision_doc.get("telemetry", {}),
             "contributing_decisions": decision_doc.get("contributing_decisions", []),
         }
+        if include_event_payload:
+            result["event_payload"] = payload
+            result["capability"] = capability or {}
+        return result
+
+    def _event_type_supported(self, event_type: str) -> bool:
+        EventType = self._imports.get("EventType")
+        if EventType is None:
+            return False
+        try:
+            EventType(event_type)
+        except ValueError:
+            return False
+        return True
 
 
 def _ensure_harnessable_import_path() -> None:

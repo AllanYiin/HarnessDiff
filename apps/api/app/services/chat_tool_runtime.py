@@ -14,6 +14,11 @@ from app.services.subagent_runtime import (
 )
 from app.services.container_code_runtime import CONTAINER_CODE_TOOL_NAME
 from app.services.pdf_attachments import PdfAttachmentToolRuntime
+from app.services.skill_routing_review import (
+    SKILL_ROUTING_REVIEW_OPENAI_NAME,
+    SKILL_ROUTING_REVIEW_TOOL_NAME,
+    SkillRoutingReviewRuntime,
+)
 from app.services.tool_runtime import (
     ToolAnythingRuntime,
     _elapsed_ms,
@@ -69,6 +74,7 @@ class ChatToolRuntime:
         include_subagent: bool = True,
         include_parallel: bool = True,
         pdf_runtime: PdfAttachmentToolRuntime | None = None,
+        skill_routing_review_runtime: SkillRoutingReviewRuntime | None = None,
     ) -> None:
         self.standard_runtime = standard_runtime
         self.subagent_runtime = subagent_runtime
@@ -76,6 +82,7 @@ class ChatToolRuntime:
         self.include_subagent = include_subagent
         self.include_parallel = include_parallel
         self.pdf_runtime = pdf_runtime
+        self.skill_routing_review_runtime = skill_routing_review_runtime
 
     def list_openai_tools(self) -> list[dict[str, Any]]:
         tools = _prioritize_openai_tools(
@@ -94,6 +101,8 @@ class ChatToolRuntime:
             tools.append(subagent_openai_tool_for_definitions(definitions))
         if self.include_parallel:
             tools.append(parallel_openai_tool())
+        if self.skill_routing_review_runtime is not None:
+            tools.extend(self.skill_routing_review_runtime.list_openai_tools())
         return tools
 
     def list_tool_names(self) -> tuple[str, ...]:
@@ -110,9 +119,19 @@ class ChatToolRuntime:
             names.append(SUBAGENT_TOOL_NAME)
         if self.include_parallel:
             names.append(PARALLEL_TOOL_NAME)
+        if self.skill_routing_review_runtime is not None:
+            names.extend(self.skill_routing_review_runtime.list_tool_names())
         return tuple(names)
 
     async def invoke_openai_tool(self, openai_name: str, arguments: dict[str, Any]) -> Any:
+        if openai_name in {SKILL_ROUTING_REVIEW_OPENAI_NAME, SKILL_ROUTING_REVIEW_TOOL_NAME}:
+            if self.skill_routing_review_runtime is None:
+                return _tool_not_allowed(
+                    openai_name, SKILL_ROUTING_REVIEW_TOOL_NAME, arguments
+                )
+            return await self.skill_routing_review_runtime.invoke_openai_tool(
+                openai_name, arguments
+            )
         if openai_name in {PARALLEL_OPENAI_NAME, PARALLEL_TOOL_NAME}:
             return await self._invoke_parallel(arguments)
         if openai_name in {SUBAGENT_OPENAI_NAME, SUBAGENT_TOOL_NAME}:

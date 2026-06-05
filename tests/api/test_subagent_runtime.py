@@ -13,6 +13,12 @@ from app.services.chat_tool_runtime import (
     PARALLEL_TOOL_NAME,
     ChatToolRuntime,
 )
+from app.services.skill_routing_review import (
+    SKILL_ROUTING_REVIEW_OPENAI_NAME,
+    SKILL_ROUTING_REVIEW_TOOL_NAME,
+    SkillRoutingReviewRuntime,
+)
+from app.services.skill_store import SkillStore
 from app.services.subagent_definitions import SubagentDefinition
 from app.services.subagent_runtime import (
     SUBAGENT_OPENAI_NAME,
@@ -72,6 +78,48 @@ def test_chat_tool_runtime_can_expose_restricted_no_harness_tool_set() -> None:
     assert subagent.calls == []
     assert subagent_result.output_payload()["ok"] is False
     assert subagent_result.output_payload()["error"]["type"] == "tool_not_allowed"
+
+
+def test_chat_tool_runtime_exposes_skill_routing_review_when_configured(tmp_path) -> None:
+    home = tmp_path / "home"
+    skill_dir = home / "skills" / "humanize-text"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: humanize-text\n"
+        "description: Rewrite AI-sounding text into a natural human voice.\n"
+        "---\n"
+        "# Humanize\n",
+        encoding="utf-8",
+    )
+    standard = FakeStandardRuntime()
+    runtime = ChatToolRuntime(
+        standard_runtime=standard,
+        subagent_runtime=FakeSubagentRuntime(),
+        skill_routing_review_runtime=SkillRoutingReviewRuntime(
+            skill_store=SkillStore(home_dir=home, repo_root=tmp_path / "repo"),
+            task_text="Use humanize-text for this copy.",
+        ),
+    )
+
+    assert SKILL_ROUTING_REVIEW_TOOL_NAME in runtime.list_tool_names()
+    assert SKILL_ROUTING_REVIEW_OPENAI_NAME in {
+        tool["name"] for tool in runtime.list_openai_tools()
+    }
+
+    result = asyncio.run(
+        runtime.invoke_openai_tool(
+            SKILL_ROUTING_REVIEW_OPENAI_NAME,
+            {"trigger": "undertrigger", "selected_skill_ids": [], "audit_reasons": ["risky copy"]},
+        )
+    )
+
+    payload = result.output_payload()
+    assert payload["ok"] is True
+    assert payload["tool_name"] == SKILL_ROUTING_REVIEW_TOOL_NAME
+    assert payload["result"]["decision"] == "add"
+    assert payload["result"]["selected_skill_ids"] == ["humanize-text"]
+    assert payload["result"]["should_hydrate"] is True
 
 
 def test_chat_tool_runtime_parallel_tool_invokes_allowed_tools_concurrently() -> None:
