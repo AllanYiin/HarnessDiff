@@ -6,7 +6,8 @@ import {
   createSubagent,
   getProjectTranscript,
   listProjects,
-  listSubagents
+  listSubagents,
+  transcribeAudio
 } from "./api";
 
 function mockJsonResponse(body: unknown, ok = true, status = 200) {
@@ -112,6 +113,26 @@ describe("api response normalization", () => {
         detail: "auto"
       }
     ]);
+  });
+
+  it("posts recorded audio to the transcription endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse({ text: "語音內容" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const audio = new Blob(["audio"], { type: "audio/webm" });
+
+    await expect(transcribeAudio(audio)).resolves.toBe("語音內容");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/audio/transcriptions",
+      expect.objectContaining({
+        method: "POST",
+        body: audio,
+        headers: {
+          "Content-Type": "audio/webm",
+          "X-Audio-Filename": "voice-input.webm"
+        }
+      })
+    );
   });
 
   it("normalizes transcript profiles and drops malformed runs", async () => {

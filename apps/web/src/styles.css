@@ -1594,6 +1594,10 @@ textarea:disabled,
   font-size: 12px;
 }
 
+.neutralComposerStatus {
+  color: var(--color-muted);
+}
+
 .skillCommandMenu {
   position: absolute;
   left: var(--space-6);
@@ -1650,6 +1654,19 @@ textarea:disabled,
 .splitInputRow {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.paneInputStack {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.paneComposerTools {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 textarea,
@@ -1845,6 +1862,10 @@ select:focus {
   .inputRow {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .paneComposerTools {
+    width: 100%;
   }
 
   .toolCallDisclosure summary {

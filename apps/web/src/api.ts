@@ -535,6 +535,26 @@ export async function streamRun(
   }
 }
 
+export async function transcribeAudio(audio: Blob): Promise<string> {
+  const mimeType = audio.type || "audio/webm";
+  const response = await fetch("/api/audio/transcriptions", {
+    method: "POST",
+    headers: {
+      "Content-Type": mimeType,
+      "X-Audio-Filename": audio instanceof File ? audio.name : filenameForMimeType(mimeType)
+    },
+    body: audio
+  });
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, "語音轉文字失敗"));
+  }
+  const data = await response.json();
+  if (!isRecord(data)) {
+    return "";
+  }
+  return asString(data.text).trim();
+}
+
 export async function listSkills(): Promise<SkillListResponse> {
   const response = await fetch("/api/skills");
   if (!response.ok) {
@@ -698,6 +718,13 @@ function folderNameFromFiles(files: FileList) {
   const first = files[0];
   const relativePath = first?.webkitRelativePath ?? "";
   return relativePath.split("/")[0] || "skill-folder";
+}
+
+function filenameForMimeType(mimeType: string) {
+  if (mimeType === "audio/wav") return "voice-input.wav";
+  if (mimeType === "audio/mpeg" || mimeType === "audio/mp3") return "voice-input.mp3";
+  if (mimeType === "audio/mp4") return "voice-input.mp4";
+  return "voice-input.webm";
 }
 
 async function responseErrorMessage(response: Response, action: string): Promise<string> {

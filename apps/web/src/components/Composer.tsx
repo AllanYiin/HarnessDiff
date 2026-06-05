@@ -12,38 +12,25 @@ type ComposerProps = {
   profileDrafts: Record<ProfileId, string>;
   skills: SkillSummary[];
   attachments: AttachmentPreview[];
+  profileAttachments: Record<ProfileId, AttachmentPreview[]>;
   disabled: boolean;
   profileDisabled: Record<ProfileId, boolean>;
   running: boolean;
   onModeChange: (mode: InputMode) => void;
   onIntegratedDraftChange: (value: string) => void;
   onProfileDraftChange: (profileId: ProfileId, value: string) => void;
-  onAttach: (files: FileList | File[] | null) => void;
-  onRemoveAttachment: (id: string) => void;
+  onAttach: (target: VoiceTarget, files: FileList | File[] | null) => void;
+  onRemoveAttachment: (target: VoiceTarget, id: string) => void;
+  onTranscribeAudio: (target: VoiceTarget, audio: Blob) => Promise<string>;
   onSubmitIntegrated: () => void;
   onSubmitProfile: (profileId: ProfileId) => void;
   onPause: () => void;
 };
 
-type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
-
-type SpeechRecognitionLike = {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
-  onerror: (() => void) | null;
-  onend: (() => void) | null;
-  start: () => void;
-  stop: () => void;
-};
-
-type SpeechRecognitionEventLike = {
-  results: ArrayLike<{ 0: { transcript: string }; isFinal: boolean }>;
-};
+type VoiceTarget = "integrated" | ProfileId;
 
 type SlashState = {
-  target: "integrated" | ProfileId;
+  target: VoiceTarget;
   query: string;
   start: number;
   end: number;
@@ -61,13 +48,6 @@ type SkillTokenRange = {
   id: string;
 };
 
-declare global {
-  interface Window {
-    SpeechRecognition?: SpeechRecognitionConstructor;
-    webkitSpeechRecognition?: SpeechRecognitionConstructor;
-  }
-}
-
 export function Composer({
   inputMode,
   integratedDraft,
@@ -75,6 +55,7 @@ export function Composer({
   profileDrafts,
   skills,
   attachments,
+  profileAttachments,
   disabled,
   profileDisabled,
   running,
@@ -83,20 +64,30 @@ export function Composer({
   onProfileDraftChange,
   onAttach,
   onRemoveAttachment,
+  onTranscribeAudio,
   onSubmitIntegrated,
   onSubmitProfile,
   onPause
 }: ComposerProps) {
-  const [listening, setListening] = useState(false);
-  const [voiceError, setVoiceError] = useState("");
-  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
-  const listeningRef = useRef(false);
-  const activeTargetRef = useRef<"integrated" | ProfileId>("integrated");
+  const [listeningTarget, setListeningTarget] = useState<VoiceTarget | null>(null);
+  const [transcribingTarget, setTranscribingTarget] = useState<VoiceTarget | null>(null);
+  const [voiceErrors, setVoiceErrors] = useState<Record<string, string>>({});
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recorderStreamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingTargetRef = useRef<VoiceTarget | null>(null);
+  const activeTargetRef = useRef<VoiceTarget>("integrated");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const profileFileInputRefs = useRef<Record<ProfileId, HTMLInputElement | null>>({});
   const integratedEditorRef = useRef<PromptEditorHandle | null>(null);
   const profileEditorRefs = useRef<Record<ProfileId, PromptEditorHandle | null>>({});
+  const integratedDraftRef = useRef(integratedDraft);
+  const profileDraftsRef = useRef(profileDrafts);
   const [slashState, setSlashState] = useState<SlashState | null>(null);
   const [activeSlashIndex, setActiveSlashIndex] = useState(0);
+
+  integratedDraftRef.current = integratedDraft;
+  profileDraftsRef.current = profileDrafts;
 
   const slashMatches = slashState
     ? skills
@@ -111,20 +102,19 @@ export function Composer({
         .slice(0, 8)
     : [];
 
-  function appendToActiveDraft(text: string) {
+  function appendToDraft(target: VoiceTarget, text: string) {
     const value = text.trim();
     if (!value) {
       return;
     }
-    if (activeTargetRef.current === "integrated") {
-      onIntegratedDraftChange(joinDraft(integratedDraft, value));
+    if (target === "integrated") {
+      onIntegratedDraftChange(joinDraft(integratedDraftRef.current, value));
       return;
     }
-    const profileId = activeTargetRef.current;
-    onProfileDraftChange(profileId, joinDraft(profileDrafts[profileId] ?? "", value));
+    onProfileDraftChange(target, joinDraft(profileDraftsRef.current[target] ?? "", value));
   }
 
-  function updateSlashState(target: "integrated" | ProfileId, value: string, cursor: number) {
+  function updateSlashState(target: VoiceTarget, value: string, cursor: number) {
     const next = slashQueryAtCursor(value, cursor);
     if (!next || !skills.length) {
       setSlashState(null);
@@ -135,7 +125,7 @@ export function Composer({
     setActiveSlashIndex(0);
   }
 
-  function handleEditorChange(target: "integrated" | ProfileId, value: string, cursor: number) {
+  function handleEditorChange(target: VoiceTarget, value: string, cursor: number) {
     if (target === "integrated") {
       onIntegratedDraftChange(value);
     } else {
@@ -144,7 +134,7 @@ export function Composer({
     updateSlashState(target, value, cursor);
   }
 
-  function handleEditorFocus(target: "integrated" | ProfileId, value: string, cursor: number) {
+  function handleEditorFocus(target: VoiceTarget, value: string, cursor: number) {
     activeTargetRef.current = target;
     updateSlashState(target, value, cursor);
   }
@@ -201,79 +191,127 @@ export function Composer({
       return;
     }
     event.preventDefault();
-    onAttach(files);
+    onAttach(activeTargetRef.current, files);
   }
 
-  function setVoiceListening(value: boolean) {
-    listeningRef.current = value;
-    setListening(value);
+  function setVoiceError(target: VoiceTarget, message: string) {
+    setVoiceErrors((current) => ({ ...current, [target]: message }));
+  }
+
+  function clearVoiceError(target: VoiceTarget) {
+    setVoiceErrors((current) => {
+      if (!current[target]) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[target];
+      return next;
+    });
   }
 
   function stopVoiceInput() {
-    const recognition = recognitionRef.current;
-    if (!recognition && !listeningRef.current) {
-      setListening(false);
+    const recorder = recorderRef.current;
+    if (!recorder) {
+      setListeningTarget(null);
       return;
     }
     try {
-      recognition?.stop();
-    } finally {
-      setVoiceListening(false);
-    }
-  }
-
-  function startVoiceInput() {
-    if (listeningRef.current) {
-      return;
-    }
-    const Recognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
-    if (!Recognition) {
-      setVoiceError("此瀏覽器不支援語音輸入");
-      return;
-    }
-    const recognition = new Recognition();
-    recognition.lang = "zh-TW";
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.onresult = (event) => {
-      const text = Array.from(event.results)
-        .map((result) => result[0]?.transcript ?? "")
-        .join(" ")
-        .trim();
-      appendToActiveDraft(text);
-    };
-    recognition.onerror = () => {
-      setVoiceError("語音輸入失敗，請確認麥克風權限");
-      setVoiceListening(false);
-    };
-    recognition.onend = () => {
-      if (recognitionRef.current === recognition) {
-        recognitionRef.current = null;
+      if (recorder.state !== "inactive") {
+        recorder.stop();
       }
-      setVoiceListening(false);
-    };
-    recognitionRef.current = recognition;
-    setVoiceError("");
-    setVoiceListening(true);
-    try {
-      recognition.start();
-    } catch {
-      recognitionRef.current = null;
-      setVoiceError("語音輸入失敗，請確認麥克風權限");
-      setVoiceListening(false);
+    } finally {
+      setListeningTarget(null);
     }
   }
 
-  function handleVoicePointerDown(event: PointerEvent<HTMLButtonElement>) {
+  async function startVoiceInput(target: VoiceTarget) {
+    if (recorderRef.current || transcribingTarget) {
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setVoiceError(target, "此瀏覽器不支援錄音輸入");
+      return;
+    }
+    clearVoiceError(target);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = preferredRecordingMimeType();
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      recorderStreamRef.current = stream;
+      recorderRef.current = recorder;
+      recordingTargetRef.current = target;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+      recorder.onerror = () => {
+        setVoiceError(target, "錄音失敗，請確認麥克風權限");
+        stopRecorderTracks();
+        recorderRef.current = null;
+        recordingTargetRef.current = null;
+        setListeningTarget(null);
+      };
+      recorder.onstop = () => {
+        const stoppedTarget = recordingTargetRef.current ?? target;
+        const audioType = recorder.mimeType || mimeType || "audio/webm";
+        const audio = new Blob(audioChunksRef.current, { type: audioType });
+        stopRecorderTracks();
+        recorderRef.current = null;
+        recordingTargetRef.current = null;
+        audioChunksRef.current = [];
+        setListeningTarget(null);
+        if (audio.size === 0) {
+          setVoiceError(stoppedTarget, "沒有收到可轉錄的語音");
+          return;
+        }
+        setTranscribingTarget(stoppedTarget);
+        onTranscribeAudio(stoppedTarget, audio)
+          .then((text) => {
+            appendToDraft(stoppedTarget, text);
+            clearVoiceError(stoppedTarget);
+          })
+          .catch((error) => {
+            setVoiceError(
+              stoppedTarget,
+              error instanceof Error ? error.message : "語音轉文字失敗"
+            );
+          })
+          .finally(() => setTranscribingTarget(null));
+      };
+      setListeningTarget(target);
+      recorder.start();
+    } catch {
+      stopRecorderTracks();
+      recorderRef.current = null;
+      recordingTargetRef.current = null;
+      setListeningTarget(null);
+      setVoiceError(target, "錄音失敗，請確認麥克風權限");
+    }
+  }
+
+  function stopRecorderTracks() {
+    recorderStreamRef.current?.getTracks().forEach((track) => track.stop());
+    recorderStreamRef.current = null;
+  }
+
+  function preferredRecordingMimeType() {
+    const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
+    return candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ?? "";
+  }
+
+  function handleVoicePointerDown(target: VoiceTarget, event: PointerEvent<HTMLButtonElement>) {
     if (event.button !== 0) {
       return;
     }
+    activeTargetRef.current = target;
     try {
       event.currentTarget.setPointerCapture(event.pointerId);
     } catch {
       // Pointer capture is best-effort; start/stop still works for the active target.
     }
-    startVoiceInput();
+    void startVoiceInput(target);
   }
 
   function handleVoicePointerEnd(event: PointerEvent<HTMLButtonElement>) {
@@ -287,12 +325,13 @@ export function Composer({
     stopVoiceInput();
   }
 
-  function handleVoiceKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
+  function handleVoiceKeyDown(target: VoiceTarget, event: KeyboardEvent<HTMLButtonElement>) {
     if (event.repeat || (event.key !== " " && event.key !== "Enter")) {
       return;
     }
+    activeTargetRef.current = target;
     event.preventDefault();
-    startVoiceInput();
+    void startVoiceInput(target);
   }
 
   function handleVoiceKeyUp(event: KeyboardEvent<HTMLButtonElement>) {
@@ -301,6 +340,72 @@ export function Composer({
     }
     event.preventDefault();
     stopVoiceInput();
+  }
+
+  function renderVoiceButton(target: VoiceTarget, targetDisabled: boolean) {
+    const active = listeningTarget === target;
+    const transcribing = transcribingTarget === target;
+    const busyElsewhere =
+      Boolean(listeningTarget && listeningTarget !== target) ||
+      Boolean(transcribingTarget && transcribingTarget !== target);
+    return (
+      <button
+        className={`iconButton ${active ? "activeIconButton" : ""}`}
+        type="button"
+        aria-label={
+          active
+            ? "放開結束語音輸入"
+            : transcribing
+              ? "語音轉文字中"
+              : "按住開始語音輸入"
+        }
+        aria-pressed={active}
+        disabled={targetDisabled || transcribing || busyElsewhere}
+        onPointerDown={(event) => handleVoicePointerDown(target, event)}
+        onPointerUp={handleVoicePointerEnd}
+        onPointerCancel={handleVoicePointerEnd}
+        onKeyDown={(event) => handleVoiceKeyDown(target, event)}
+        onKeyUp={handleVoiceKeyUp}
+        onBlur={stopVoiceInput}
+      >
+        <Mic aria-hidden="true" size={18} />
+      </button>
+    );
+  }
+
+  function renderAttachmentStrip(target: VoiceTarget, source: AttachmentPreview[]) {
+    if (source.length === 0) {
+      return null;
+    }
+    return (
+      <div className="attachmentStrip" aria-label="Attachment previews">
+        {source.map((attachment) => (
+          <button
+            className={`attachmentPreview ${attachment.status === "error" ? "attachmentError" : ""}`}
+            key={attachment.id}
+            type="button"
+            onClick={() => onRemoveAttachment(target, attachment.id)}
+            title={attachment.error ?? "移除附件"}
+          >
+            {attachment.url ? <img src={attachment.url} alt="" /> : <Paperclip size={16} />}
+            <span>{attachment.name}</span>
+            <small>{attachment.kind}</small>
+            <X aria-hidden="true" size={14} />
+          </button>
+        ))}
+      </div>
+    );
+  }
+
+  function renderVoiceStatus(target: VoiceTarget) {
+    const error = voiceErrors[target];
+    if (error) {
+      return <div className="composerStatus">{error}</div>;
+    }
+    if (transcribingTarget === target) {
+      return <div className="composerStatus neutralComposerStatus">語音轉文字中</div>;
+    }
+    return null;
   }
 
   return (
@@ -331,55 +436,29 @@ export function Composer({
               暫停執行
             </button>
           ) : null}
-          <label className="iconButton fileButton" aria-label="Attach file">
-            <Paperclip aria-hidden="true" size={18} />
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept=".txt,.csv,.docx,.xlsx,.pptx,.md,.pdf,image/*"
-              onChange={(event) => {
-                onAttach(event.target.files);
-                event.target.value = "";
-              }}
-            />
-          </label>
-          <button
-            className={`iconButton ${listening ? "activeIconButton" : ""}`}
-            type="button"
-            aria-label={listening ? "Release to stop voice input" : "Hold to voice input"}
-            aria-pressed={listening}
-            onPointerDown={handleVoicePointerDown}
-            onPointerUp={handleVoicePointerEnd}
-            onPointerCancel={handleVoicePointerEnd}
-            onKeyDown={handleVoiceKeyDown}
-            onKeyUp={handleVoiceKeyUp}
-            onBlur={stopVoiceInput}
-          >
-            <Mic aria-hidden="true" size={18} />
-          </button>
+          {inputMode === "integrated" ? (
+            <>
+              <label className="iconButton fileButton" aria-label="Attach file">
+                <Paperclip aria-hidden="true" size={18} />
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  accept=".txt,.csv,.docx,.xlsx,.pptx,.md,.pdf,image/*"
+                  onChange={(event) => {
+                    onAttach("integrated", event.target.files);
+                    event.target.value = "";
+                  }}
+                />
+              </label>
+              {renderVoiceButton("integrated", disabled)}
+            </>
+          ) : null}
         </div>
       </div>
 
-      {attachments.length > 0 ? (
-        <div className="attachmentStrip" aria-label="Attachment previews">
-          {attachments.map((attachment) => (
-            <button
-              className={`attachmentPreview ${attachment.status === "error" ? "attachmentError" : ""}`}
-              key={attachment.id}
-              type="button"
-              onClick={() => onRemoveAttachment(attachment.id)}
-              title={attachment.error ?? "移除附件"}
-            >
-              {attachment.url ? <img src={attachment.url} alt="" /> : <Paperclip size={16} />}
-              <span>{attachment.name}</span>
-              <small>{attachment.kind}</small>
-              <X aria-hidden="true" size={14} />
-            </button>
-          ))}
-        </div>
-      ) : null}
-      {voiceError ? <div className="composerStatus">{voiceError}</div> : null}
+      {inputMode === "integrated" ? renderAttachmentStrip("integrated", attachments) : null}
+      {inputMode === "integrated" ? renderVoiceStatus("integrated") : null}
       {slashState && slashMatches.length > 0 ? (
         <div className="skillCommandMenu" role="listbox" id="skill-command-menu">
           {slashMatches.map((skill, index) => (
@@ -428,36 +507,59 @@ export function Composer({
           {profiles.map((profile) => {
             const hasControls = Object.values(profile.harness_modules).some(Boolean);
             const paneDisabled = profileDisabled[profile.id] ?? false;
+            const paneAttachments = profileAttachments[profile.id] ?? [];
             return (
-              <div className="inputRow" key={profile.id}>
-                <PromptEditor
-                  ref={(element) => {
-                    profileEditorRefs.current[profile.id] = element;
-                  }}
-                  value={profileDrafts[profile.id] ?? ""}
-                  skills={skills}
-                  onValueChange={(value, cursor) => handleEditorChange(profile.id, value, cursor)}
-                  onFocus={(cursor) => handleEditorFocus(profile.id, profileDrafts[profile.id] ?? "", cursor)}
-                  onPaste={handlePaste}
-                  onKeyDown={handleTextKeyDown}
-                  onSelectionChange={(cursor) =>
-                    updateSlashState(profile.id, profileDrafts[profile.id] ?? "", cursor)
-                  }
-                  placeholder={`只送到 ${profile.label}。`}
-                  disabled={paneDisabled}
-                  aria-controls={slashState?.target === profile.id ? "skill-command-menu" : undefined}
-                  aria-expanded={slashState?.target === profile.id && slashMatches.length > 0}
-                  aria-autocomplete="list"
-                />
-                <button
-                  className={`sendButton ${hasControls ? "harnessSend" : "secondarySend"}`}
-                  type="button"
-                  onClick={() => onSubmitProfile(profile.id)}
-                  disabled={paneDisabled}
-                >
-                  <Send aria-hidden="true" size={18} />
-                  送 {profile.label}
-                </button>
+              <div className="paneInputStack" key={profile.id}>
+                <div className="inputRow">
+                  <PromptEditor
+                    ref={(element) => {
+                      profileEditorRefs.current[profile.id] = element;
+                    }}
+                    value={profileDrafts[profile.id] ?? ""}
+                    skills={skills}
+                    onValueChange={(value, cursor) => handleEditorChange(profile.id, value, cursor)}
+                    onFocus={(cursor) => handleEditorFocus(profile.id, profileDrafts[profile.id] ?? "", cursor)}
+                    onPaste={handlePaste}
+                    onKeyDown={handleTextKeyDown}
+                    onSelectionChange={(cursor) =>
+                      updateSlashState(profile.id, profileDrafts[profile.id] ?? "", cursor)
+                    }
+                    placeholder={`只送到 ${profile.label}。`}
+                    disabled={paneDisabled}
+                    aria-controls={slashState?.target === profile.id ? "skill-command-menu" : undefined}
+                    aria-expanded={slashState?.target === profile.id && slashMatches.length > 0}
+                    aria-autocomplete="list"
+                  />
+                  <div className="paneComposerTools">
+                    <label className="iconButton fileButton" aria-label={`Attach file to ${profile.label}`}>
+                      <Paperclip aria-hidden="true" size={18} />
+                      <input
+                        ref={(element) => {
+                          profileFileInputRefs.current[profile.id] = element;
+                        }}
+                        type="file"
+                        multiple
+                        accept=".txt,.csv,.docx,.xlsx,.pptx,.md,.pdf,image/*"
+                        onChange={(event) => {
+                          onAttach(profile.id, event.target.files);
+                          event.target.value = "";
+                        }}
+                      />
+                    </label>
+                    {renderVoiceButton(profile.id, paneDisabled)}
+                  </div>
+                  <button
+                    className={`sendButton ${hasControls ? "harnessSend" : "secondarySend"}`}
+                    type="button"
+                    onClick={() => onSubmitProfile(profile.id)}
+                    disabled={paneDisabled}
+                  >
+                    <Send aria-hidden="true" size={18} />
+                    送 {profile.label}
+                  </button>
+                </div>
+                {renderAttachmentStrip(profile.id, paneAttachments)}
+                {renderVoiceStatus(profile.id)}
               </div>
             );
           })}

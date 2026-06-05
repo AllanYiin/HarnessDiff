@@ -24,6 +24,7 @@ import {
   listSubagents,
   listTools,
   streamRun,
+  transcribeAudio,
   updateSubagentEnabled,
   updateSkillEnabled,
   updateToolEnabled,
@@ -114,6 +115,12 @@ function createInitialProfileState(profiles: ProfileInstance[]): Record<ProfileI
   );
 }
 
+function createInitialProfileAttachments(
+  profiles: ProfileInstance[]
+): Record<ProfileId, AttachmentPreview[]> {
+  return Object.fromEntries(profiles.map((profile) => [profile.id, []]));
+}
+
 function profilesForSurface(surfaceType: SurfaceType) {
   return surfaceType === "agent" ? defaultAgentProfiles : defaultProfiles;
 }
@@ -160,7 +167,10 @@ export function App() {
   const [profiles, setProfiles] = useState<ProfileInstance[]>(() => profilesForSurface(readPreferredSurface()));
   const [analysis, setAnalysis] = useState<AnalysisDocument | null>(null);
   const [integratedDraft, setIntegratedDraft] = useState("");
-  const [attachments, setAttachments] = useState<AttachmentPreview[]>([]);
+  const [integratedAttachments, setIntegratedAttachments] = useState<AttachmentPreview[]>([]);
+  const [profileAttachments, setProfileAttachments] = useState<Record<ProfileId, AttachmentPreview[]>>(
+    () => createInitialProfileAttachments(profilesForSurface(readPreferredSurface()))
+  );
   const [agentSteps, setAgentSteps] = useState<Record<ProfileId, AgentStepTrace[]>>({});
   const [profileState, setProfileState] = useState<Record<ProfileId, ProfileState>>(
     () => createInitialProfileState(profilesForSurface(readPreferredSurface()))
@@ -315,11 +325,14 @@ export function App() {
     setInputMode("integrated");
     setAnalysis(null);
     setIntegratedDraft("");
-    setAttachments([]);
+    clearAttachmentList(integratedAttachments);
+    Object.values(profileAttachments).forEach(clearAttachmentList);
+    setIntegratedAttachments([]);
     setSurfaceType(nextSurfaceType);
     const nextProfiles = profilesForSurface(nextSurfaceType);
     setProfiles(nextProfiles);
     setProfileState(createInitialProfileState(nextProfiles));
+    setProfileAttachments(createInitialProfileAttachments(nextProfiles));
     setAgentSteps({});
     if (nextProjectId) {
       window.localStorage.setItem(activeProjectStorageKey, nextProjectId);
@@ -523,6 +536,8 @@ export function App() {
       writePreferredSurface(transcript.project.surface_type);
       setProfiles(nextProfiles);
       setProfileState(nextProfileState);
+      setIntegratedAttachments([]);
+      setProfileAttachments(createInitialProfileAttachments(nextProfiles));
       setAgentSteps(nextAgentSteps);
       setTurnCount(transcript.runs.length);
       setInputMode(transcript.runs.length > 0 ? "independent" : "integrated");
@@ -783,15 +798,19 @@ export function App() {
 
   async function submitIntegrated() {
     const draft = integratedDraft.trim();
-    if ((!draft && attachments.length === 0) || running || submittingProfilesRef.current.size > 0) {
+    if (
+      (!draft && integratedAttachments.length === 0) ||
+      running ||
+      submittingProfilesRef.current.size > 0
+    ) {
       return;
     }
     try {
-      const prompt = await buildPromptWithContext(draft);
-      const runAttachments = attachmentRunInputs(attachments);
-      const messageAttachments = messageAttachmentPreviews(attachments);
+      const prompt = await buildPromptWithContext(draft, integratedAttachments);
+      const runAttachments = attachmentRunInputs(integratedAttachments);
+      const messageAttachments = messageAttachmentPreviews(integratedAttachments);
       setIntegratedDraft("");
-      clearAttachments();
+      clearAttachments("integrated");
       void submitWithApi(
         prompt,
         draft,
@@ -809,6 +828,7 @@ export function App() {
   async function submitProfile(profileId: ProfileId) {
     const profile = profiles.find((candidate) => candidate.id === profileId);
     const draft = profileState[profileId]?.draft.trim() ?? "";
+    const attachments = profileAttachments[profileId] ?? [];
     if (!profile) {
       return;
     }
@@ -820,11 +840,11 @@ export function App() {
       return;
     }
     try {
-      const prompt = await buildPromptWithContext(draft);
+      const prompt = await buildPromptWithContext(draft, attachments);
       const runAttachments = attachmentRunInputs(attachments);
       const messageAttachments = messageAttachmentPreviews(attachments);
       updateProfileState(profileId, (current) => ({ ...current, draft: "" }));
-      clearAttachments();
+      clearAttachments(profileId);
       void submitWithApi(prompt, draft, [profileId], "independent", runAttachments, messageAttachments);
     } catch (error) {
       setSkillError(errorMessage(error));
@@ -834,15 +854,19 @@ export function App() {
 
   async function submitAgentTask() {
     const draft = integratedDraft.trim();
-    if ((!draft && attachments.length === 0) || running || submittingProfilesRef.current.size > 0) {
+    if (
+      (!draft && integratedAttachments.length === 0) ||
+      running ||
+      submittingProfilesRef.current.size > 0
+    ) {
       return;
     }
     try {
-      const prompt = await buildPromptWithContext(draft);
-      const runAttachments = attachmentRunInputs(attachments);
-      const messageAttachments = messageAttachmentPreviews(attachments);
+      const prompt = await buildPromptWithContext(draft, integratedAttachments);
+      const runAttachments = attachmentRunInputs(integratedAttachments);
+      const messageAttachments = messageAttachmentPreviews(integratedAttachments);
       setIntegratedDraft("");
-      clearAttachments();
+      clearAttachments("integrated");
       setAgentSteps({});
       void submitWithApi(
         prompt,
@@ -866,15 +890,22 @@ export function App() {
     }
   }
 
-  async function handleAttach(files: FileList | File[] | null) {
+  async function handleAttach(target: "integrated" | ProfileId, files: FileList | File[] | null) {
     if (!files || files.length === 0) {
       return;
     }
     const previews = await ingestFiles(files);
-    setAttachments((current) => [...current, ...previews]);
+    if (target === "integrated") {
+      setIntegratedAttachments((current) => [...current, ...previews]);
+      return;
+    }
+    setProfileAttachments((current) => ({
+      ...current,
+      [target]: [...(current[target] ?? []), ...previews]
+    }));
   }
 
-  function buildPromptWithAttachments(text: string) {
+  function buildPromptWithAttachments(text: string, attachments: AttachmentPreview[]) {
     return `${text}${attachmentPromptBlock(attachments)}`.trim();
   }
 
@@ -897,8 +928,8 @@ export function App() {
     });
   }
 
-  async function buildPromptWithContext(text: string) {
-    const withAttachments = buildPromptWithAttachments(text);
+  async function buildPromptWithContext(text: string, attachments: AttachmentPreview[]) {
+    const withAttachments = buildPromptWithAttachments(text, attachments);
     const skillIds = parseSkillCommandIds(text, enabledSkills);
     if (!skillIds.length) {
       return withAttachments;
@@ -907,14 +938,17 @@ export function App() {
     return `${withAttachments}${skillDetailsPromptBlock(details)}`.trim();
   }
 
-  function clearAttachments() {
-    setAttachments((current) => {
-      current.forEach((attachment) => {
-        if (attachment.url) {
-          URL.revokeObjectURL(attachment.url);
-        }
+  function clearAttachments(target: "integrated" | ProfileId) {
+    if (target === "integrated") {
+      setIntegratedAttachments((current) => {
+        clearAttachmentList(current);
+        return [];
       });
-      return [];
+      return;
+    }
+    setProfileAttachments((current) => {
+      clearAttachmentList(current[target] ?? []);
+      return { ...current, [target]: [] };
     });
   }
 
@@ -927,13 +961,39 @@ export function App() {
     return prompt;
   }
 
-  function removeAttachment(id: string) {
-    setAttachments((current) => {
-      const target = current.find((attachment) => attachment.id === id);
-      if (target?.url) {
-        URL.revokeObjectURL(target.url);
+  function removeAttachment(target: "integrated" | ProfileId, id: string) {
+    if (target === "integrated") {
+      setIntegratedAttachments((current) => {
+        const targetAttachment = current.find((attachment) => attachment.id === id);
+        if (targetAttachment?.url) {
+          URL.revokeObjectURL(targetAttachment.url);
+        }
+        return current.filter((attachment) => attachment.id !== id);
+      });
+      return;
+    }
+    setProfileAttachments((current) => {
+      const attachments = current[target] ?? [];
+      const targetAttachment = attachments.find((attachment) => attachment.id === id);
+      if (targetAttachment?.url) {
+        URL.revokeObjectURL(targetAttachment.url);
       }
-      return current.filter((attachment) => attachment.id !== id);
+      return {
+        ...current,
+        [target]: attachments.filter((attachment) => attachment.id !== id)
+      };
+    });
+  }
+
+  async function handleTranscribeAudio(_target: "integrated" | ProfileId, audio: Blob) {
+    return transcribeAudio(audio);
+  }
+
+  function clearAttachmentList(attachments: AttachmentPreview[]) {
+    attachments.forEach((attachment) => {
+      if (attachment.url) {
+        URL.revokeObjectURL(attachment.url);
+      }
     });
   }
 
@@ -1084,12 +1144,12 @@ export function App() {
       {surfaceType === "agent" ? (
         <AgentComposer
           draft={integratedDraft}
-          attachments={attachments}
+          attachments={integratedAttachments}
           disabled={running}
           running={running}
           onDraftChange={setIntegratedDraft}
-          onAttach={handleAttach}
-          onRemoveAttachment={removeAttachment}
+          onAttach={(files) => handleAttach("integrated", files)}
+          onRemoveAttachment={(id) => removeAttachment("integrated", id)}
           onSubmit={submitAgentTask}
           onCancel={pauseExecution}
         />
@@ -1102,7 +1162,8 @@ export function App() {
             profiles.map((profile) => [profile.id, profileState[profile.id]?.draft ?? ""])
           )}
           skills={enabledSkills}
-          attachments={attachments}
+          attachments={integratedAttachments}
+          profileAttachments={profileAttachments}
           disabled={running}
           profileDisabled={profileDisabled}
           running={running}
@@ -1113,6 +1174,7 @@ export function App() {
           }
           onAttach={handleAttach}
           onRemoveAttachment={removeAttachment}
+          onTranscribeAudio={handleTranscribeAudio}
           onSubmitIntegrated={submitIntegrated}
           onSubmitProfile={submitProfile}
           onPause={pauseExecution}
