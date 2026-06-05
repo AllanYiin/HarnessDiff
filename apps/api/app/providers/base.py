@@ -33,6 +33,10 @@ class SkillSelectionRequest:
     prompt: str
     skills: tuple[dict[str, str], ...]
     max_selected: int = 3
+    profile_id: str = ""
+    profile_label: str = ""
+    harness_modules: dict[str, bool] = field(default_factory=dict)
+    selection_policy: str = "llm_with_deterministic_fallback"
 
 
 @dataclass(frozen=True)

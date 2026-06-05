@@ -22,6 +22,7 @@ from app.services.tool_runtime import (
 PDF_FULL_TEXT_CHAR_THRESHOLD = 24_000
 PDF_BLOCK_TARGET_CHARS = 1_800
 PDF_BLOCK_OVERLAP_CHARS = 160
+SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
 
 PDF_GREP_TOOL_NAME = "attachment.pdf.grep"
 PDF_GREP_OPENAI_NAME = "attachment_pdf_grep"
@@ -122,6 +123,7 @@ def extract_pdf_bytes(data: bytes, *, filename: str, attachment_id: str) -> Extr
         fallback_pages, fallback_parser = _extract_pages_with_pymupdf(data)
         if any(page["text"].strip() for page in fallback_pages):
             pages, parser = fallback_pages, fallback_parser
+    pages = _normalize_pages(pages)
     text = _document_text(filename, pages)
     line_rows = _line_rows(pages)
     line_indexed_text = "\n".join(
@@ -734,7 +736,18 @@ def _preview(text: str, max_chars: int = 240) -> str:
 
 
 def _normalize_text(text: str) -> str:
-    return text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    return SURROGATE_RE.sub("\uFFFD", normalized)
+
+
+def _normalize_pages(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            **page,
+            "text": _normalize_text(str(page.get("text") or "")),
+        }
+        for page in pages
+    ]
 
 
 def _attachment_id(name: str, index: int) -> str:

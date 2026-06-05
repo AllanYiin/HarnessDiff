@@ -9,7 +9,7 @@
 ## 📌 SNAPSHOT — 當前狀態
 <!-- 這一整段每次 /devnote 會被覆寫，只反映「到目前為止的最新狀態」 -->
 
-**最後更新**：2026-05-28 21:12
+**最後更新**：2026-06-05 23:29
 
 ### 需求狀態
 - [x] Stage 0：localhost web app / FastAPI skeleton、README、env 樣板、storage/provider docs。
@@ -27,6 +27,8 @@
 - [x] Composer input：迴紋針整合檔案/圖片匯入；支援 Ctrl+V 貼上檔案、txt/md 讀文字、csv 產生 DataFrame-style preview、Office/PDF metadata 摘要、圖片 browser preview、麥克風 Web Speech API 轉文字。
 - [x] Skill system：啟動/技能 API 會建立 `~/.harnessdiff`、`CLAUDE.md`、`AGENTS.md`、`agents.md`、`skills/`；UI 可檢視技能、匯入 zip/skill/folder、逐步揭露完整 `SKILL.md`。
 - [x] Skill context：新對話第一回合自動放入已安裝技能第一層 `name/description`；輸入框支援 `/skill-id` slash command，送出時載入對應完整 `SKILL.md` 作為本回合上下文。
+- [x] Skill pane independence：NoHarness/Harness skill selection 已從 run-level 改成 profile-level；NoHarness 採 LLM-only，Harness 保留 LLM + deterministic fallback，Agent surface 同步套用。
+- [x] Debug reporting handoff：已用 `/prompts:debug_report skill兩個pane未獨立` 產出 `debugs/2026-06-05_skill_two_pane_not_independent_debug_report.md` 與 archive README。
 - [x] Vision input：PNG/JPEG/WEBP/GIF 圖片附件會以 base64 data URL 傳入 OpenAI Responses API `input_image`，兩側 profile 都能真正讀圖。
 - [x] Voice input UX：麥克風改成按下即開始、放開/取消自動停止，並支援 Space/Enter 鍵盤按住行為。
 - [x] Skill slash token UI：Composer 內已安裝 skill slash command 會顯示成 teal chip，`contenteditable=false`，Backspace/Delete 會整塊刪除。
@@ -39,6 +41,8 @@
 - Office/PDF 深度文字抽取、CSV 真正 pandas DataFrame、非圖片 binary provider upload 仍未實作；若要完整解析需新增後端 upload/parse endpoint。
 - Web Speech API 瀏覽器支援不一致，且會受麥克風權限影響；目前以前端 Web Speech API + Playwright mock 驗證互動。
 - 新的 contenteditable prompt editor 取代 textarea；後續測試或 selector 不應再假設 composer 是 `textarea`。
+- HarnessDiff 目前沒有實作 Codex custom prompts subsystem：`~/.codex/prompts/*.md` 在官方 Codex CLI/IDE extension 可用 `/prompts:name` 明確呼叫，但本 repo 前端 slash menu 只支援 skills，後端 `SkillStore` 也未掃 `~/.codex/prompts`。
+- 工作樹仍混有本次 skill-pane 修正以外的未提交變更：`pdf_attachments.py`、`styles.css`、`tests/api/test_tool_runtime.py`、`tests/api/test_runs.py` 內 PDF surrogate 測試片段與三張 `skill-panel-*.png`，不可未確認就清理或回退。
 
 ### 關鍵技術決策（當前有效）
 > 歷史上做過的、目前仍然成立的決策摘要。被推翻的決策不列。
@@ -66,6 +70,8 @@
 - **Message attachments are display-only**：對話 bubble 圖片顯示使用 `Message.attachments`，不改 provider prompt；provider input 和 UI preview 是兩條資料路徑（詳見 HISTORY `[2026-05-25 22:21]`）。
 - **Consequence Gate 只作用於 Harness pane**：`consequence_gate` 由 `context_builder` 轉成 Harness instructions，並由 `HarnessableControlPlane` 在 provider 前對 publication-like prompt 記錄 `FINAL_OUTPUT_PROPOSED` preflight decision；NoHarness 保持 baseline（詳見 HISTORY `[2026-05-28 19:48]`）。
 - **Publishing risk preview 不做 production 黑名單**：HarnessDiff 只在 Harness pane provider 前產生 preview `harness_decision` 與 UI chips；scanner coverage、similarity/provenance finding、claim/offer/rollback 都走結構化 finding，不在 core 內建 OCR/CV/embedding 或特定事故黑名單（詳見 HISTORY `[2026-05-28 21:12]`）。
+- **Skill routing 以 profile 為 state boundary**：integrated run 可以共享 prompt/attachments/run artifact，但 skill selection、skill invocation、tool availability、AGENTS context 與 fallback policy 必須以 profile/pane 為界（詳見 HISTORY `[2026-06-05 23:29]`）。
+- **Codex custom prompts 不混入 skills**：`~/.codex/prompts` 是官方 Codex CLI/IDE extension 的 deprecated slash-command surface；若 HarnessDiff 要支援，應新增 PromptStore/API/frontend namespace，不要硬塞進 `SkillStore`（詳見 HISTORY `[2026-06-05 23:29]`）。
 
 ### 已知地雷（仍需注意）
 > 踩過且未來仍可能重踩的坑的一句話提醒。已徹底不可能重現的不列。
@@ -88,6 +94,9 @@
 - **Zip/folder skill import path traversal**：匯入相對路徑不可信任，必須拒絕絕對路徑、空 path parts 與 `..`。
 - **Prompt editor selector change**：Composer 不再是 `textarea`，e2e 與 UI 操作要改用 `.promptEditor` 或 ARIA textbox。
 - **Blob URL lifecycle**：送出後 `clearAttachments()` 會 revoke browser `blob:` URL；需要在對話中持續顯示圖片時，必須先複製 `dataUrl` 到 display-only message attachment。
+- **Skill selection regression risk**：看到 NoHarness/Harness skill 又完全相同時，先查是否有人把 `_select_skills_for_profile(run, profile)` 移回 run 外層，或讓 deterministic fallback 套到 baseline。
+- **Pytest log write sandbox**：`python -m pytest` collection 可能因 `toolanything` 初始化寫 `logs/toolanything.log` 被 sandbox 擋住；必要時按 policy 升權重跑測試。
+- **Custom prompts invocation mismatch**：官方 Codex prompts 呼叫格式是 `/prompts:name` 且需 restart/new chat；在 HarnessDiff 目前不會載入，`/debug_report`、`/devnote` 也不會自動展開。
 
 ---
 
@@ -534,4 +543,49 @@
 
 ### 備註
 - 驗證結果：`python -m pytest tests\api\test_runs.py -q` 24 passed；`python -m pytest -q` 75 passed、1 skipped；`python -X pycache_prefix=.compile_pycache -m compileall apps\api` 通過；`corepack pnpm --dir apps\web test` 17 passed；`corepack pnpm --dir apps\web build` 通過。
+
+---
+
+## [2026-06-05 23:29] Skill pane independence and custom prompt diagnosis
+
+### 本次做了什麼（增量）
+修正 NoHarness/Harness pane skill 永遠相同的問題：一般 chat 與 Agent surface 的 skill selection 都從 run-level 移到 profile-level，並明確區分 NoHarness `llm_only` 與 Harness `llm_with_deterministic_fallback`。同時診斷 `~/.codex/prompts` 未載入問題：官方 Codex custom prompts 已 deprecated，但仍可在 Codex CLI/IDE extension 用 `/prompts:name` 呼叫；HarnessDiff 目前沒有 prompts subsystem，前端 slash menu 與後端 `SkillStore` 都只支援 skills。最後依 `/prompts:debug_report skill兩個pane未獨立` 產出 debug report 與 archive README。
+
+### 本次重大技術決策
+- **Skill selection state boundary 改為 profile**
+  - 內容：`RunOrchestrator` 與 `AgentRunOrchestrator` 都在 `run_profile(profile)` 內呼叫 `_select_skills_for_profile(run, profile)`。
+  - 理由：NoHarness/Harness 的差異來自 profile capability 與 policy；若 selector 在 run 外層執行，就不可能讓兩 pane 獨立判斷。
+  - 影響：integrated run 仍共享 prompt、attachments 與 run artifact，但 skill context、skill invocation event、fallback policy 均以 profile 為界。
+- **NoHarness 不套 deterministic fallback**
+  - 內容：`_skill_selection_policy_for_profile(profile)` 對 baseline/NoHarness 回傳 `llm_only`；Harness profile 回傳 `llm_with_deterministic_fallback`。
+  - 理由：使用者明確要求 NoHarness 是 LLM-only，Harness 才是完整 LLM 判斷加 deterministic guard/fallback。
+  - 影響：當 LLM selector 回空時，baseline 不會被 deterministic skill match 污染；Harness 仍能用 fallback 保守啟用。
+- **Prompt metadata 不混進 SkillStore**
+  - 內容：本次只診斷 `~/.codex/prompts` 未載入，不把 deprecated custom prompts 硬塞進現有 skill 管線。
+  - 理由：官方 custom prompts 是 slash command expansion surface，和 skills 的 implicit/explicit reusable workflow 不同；混用會讓 auto selection 與 prompt expansion 語意混亂。
+  - 影響：若未來要支援，建議新增 `PromptStore`、`/api/prompts` 與前端 `prompts:` namespace。
+
+### 本次失敗經驗與填坑
+- **把 pane 問題誤判成 UI 顯示會漏掉真正根因**
+  - 試過無效：只看前端 streaming message update。
+  - 最終解法：追到 `run_orchestrator.py` 與 `agent_orchestrator.py`，確認舊版是在 profile 外先選一次 skill，再把同一組 `selected_skill_ids` 寫入每個 profile。
+  - 根因：UI 是照 `profile_id` 正確顯示；錯的是後端 selection state 放在 run-level。
+- **只修一般 chat 會留下 Agent surface 回歸**
+  - 試過無效：只改 `RunOrchestrator`。
+  - 最終解法：`AgentRunOrchestrator` 同步移除 run-level selected skill cache，改在 agent profile execution 內選 skill。
+  - 根因：Agent mode 繼承同一組 routing helper，但有獨立 stream path；兩條 orchestrator 都要維護相同 state boundary。
+- **`~/.codex/prompts` 存在不代表 HarnessDiff 會載入**
+  - 試過無效：只檢查 `C:\Users\allan\.codex\prompts\debug_report.md` 與 `devnote.md` 存在且 front matter 有效。
+  - 最終解法：查官方 Codex manual 與 HarnessDiff code path，確認官方要求 `/prompts:name`、restart/new chat、top-level Markdown；HarnessDiff 則沒有任何 prompts 掃描或展開邏輯。
+  - 根因：這是 product surface 差異，不是檔案格式錯誤。
+- **測試 collection 會被 log 寫入權限擋住**
+  - 試過無效：直接在 sandbox 跑 `python -m pytest tests\api\test_runs.py tests\api\test_openai_provider.py`。
+  - 最終解法：依 policy 升權重跑同一組 pytest。
+  - 根因：`toolanything` import 初始化會寫 `logs/toolanything.log`，sandbox 內 collection 階段就可能失敗。
+
+### 備註
+- 驗證結果：`python -m pytest tests\api\test_runs.py tests\api\test_openai_provider.py` 45 passed；`python -m pytest tests\api\test_agent_runtime.py` 10 passed。
+- 本次新增 debug report：`debugs/2026-06-05_skill_two_pane_not_independent_debug_report.md`。
+- 本次新增 archive README：`debugs/archive/2026-06-05_skill_two_pane_not_independent/README.md`。
+- 仍需注意：工作樹內存在非本次 skill-pane 修正核心的既有變更與未追蹤圖片，未經使用者確認不要清理或回退。
 

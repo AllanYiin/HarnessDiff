@@ -15,6 +15,7 @@ from app.providers.base import (
     SkillSelectionResult,
 )
 from app.providers.openai_responses import OpenAIResponsesProvider
+from app.services import pdf_attachments
 
 
 class FakeProvider(LLMProvider):
@@ -1431,6 +1432,59 @@ def test_pdf_attachments_are_inherited_across_chat_turns(tmp_path) -> None:
     )
     assert "attachment.pdf.grep" in baseline_input["tool_names"]
     assert "attachment.pdf.read_lines" in baseline_input["tool_names"]
+
+
+def test_run_create_sanitizes_pdf_extracted_surrogates(tmp_path, monkeypatch) -> None:
+    def fake_extract_pages(data: bytes):
+        return (
+            [
+                {
+                    "page_number": 1,
+                    "text": "Valid text before \udc00 invalid low surrogate\nneedle\ud800",
+                }
+            ],
+            "pypdf",
+        )
+
+    monkeypatch.setattr(pdf_attachments, "_extract_pages_with_pypdf", fake_extract_pages)
+    monkeypatch.setattr(
+        pdf_attachments,
+        "_extract_pages_with_pymupdf",
+        lambda data: ([], "pypdf"),
+    )
+    provider = FakeProvider()
+    client = TestClient(
+        create_app(data_dir=tmp_path, harnessdiff_home=tmp_path / ".harnessdiff", llm_provider=provider)
+    )
+    project_id = client.post("/api/projects", json={"name": "PDF unicode"}).json()["id"]
+
+    response = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "What is in the PDF?",
+            "input_mode": "integrated",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+            "attachments": [
+                {
+                    "kind": "pdf",
+                    "id": "paper",
+                    "name": "paper.pdf",
+                    "mime_type": "application/pdf",
+                    "size_bytes": 8,
+                    "data_base64": base64.b64encode(b"fake-pdf").decode("ascii"),
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 201
+    run = response.json()
+    run_dir = tmp_path / "projects" / project_id / "runs" / run["id"]
+    text = (run_dir / "attachments" / "paper.txt").read_text(encoding="utf-8")
+    blocks = (run_dir / "attachments" / "paper.blocks.json").read_text(encoding="utf-8")
+    assert "\uFFFD" in text
+    assert "\uFFFD" in blocks
 
 
 def test_harness_subagent_tool_call_writes_artifacts_and_usage_rollup(tmp_path) -> None:

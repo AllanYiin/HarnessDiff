@@ -303,6 +303,7 @@ def _skill_selector_instructions(max_selected: int) -> str:
     return (
         "You select HarnessDiff skills for the current user request. "
         "Use only the provided skill id, name, and description. "
+        "Use the profile context to decide what applies to this pane only. "
         "Select a skill when its description clearly applies to the user's task, including semantic matches. "
         "Do not select skills for broad or merely adjacent topics. "
         f"Return JSON only with at most {max_selected} selected_skill_ids."
@@ -313,6 +314,12 @@ def _skill_selector_input(request: SkillSelectionRequest) -> str:
     return json.dumps(
         {
             "user_prompt": request.prompt,
+            "profile": {
+                "id": request.profile_id,
+                "label": request.profile_label,
+                "harness_modules": request.harness_modules,
+                "selection_policy": request.selection_policy,
+            },
             "available_skills": list(request.skills),
         },
         ensure_ascii=False,

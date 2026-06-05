@@ -4,6 +4,8 @@ import { useState } from "react";
 import { MarkdownContent } from "./MarkdownContent";
 import { AgentTraceTimeline } from "./AgentTraceTimeline";
 import { ToolCallDisclosure } from "./ToolCallDisclosure";
+import { ContextLoadIndicator } from "./ContextLoadIndicator";
+import type { ProfileAnalysis } from "../api";
 import type { AgentStepTrace, Message, ProfileInstance } from "../types";
 
 type AgentPaneProps = {
@@ -11,9 +13,11 @@ type AgentPaneProps = {
   messages: Message[];
   steps: AgentStepTrace[];
   streaming: boolean;
+  analysis?: ProfileAnalysis;
+  model: string;
 };
 
-export function AgentPane({ profile, messages, steps, streaming }: AgentPaneProps) {
+export function AgentPane({ profile, messages, steps, streaming, analysis, model }: AgentPaneProps) {
   const hasControls = Object.values(profile.harness_modules).some(Boolean);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
 
@@ -33,9 +37,12 @@ export function AgentPane({ profile, messages, steps, streaming }: AgentPaneProp
           <h2>{profile.label}</h2>
           <p>{hasControls ? "Harness 控制與工具軌跡" : "直接 Agent 對照組"}</p>
         </div>
-        <span className={`profileStatus ${streaming ? "active" : ""}`}>
-          {streaming ? "執行中" : "待命"}
-        </span>
+        <div className="profileHeaderActions">
+          {hasControls ? <ContextLoadIndicator analysis={analysis} model={model} /> : null}
+          <span className={`profileStatus ${streaming ? "active" : ""}`}>
+            {streaming ? "執行中" : "待命"}
+          </span>
+        </div>
       </header>
       <div className="agentAnswer" aria-live="polite" tabIndex={0}>
         {messages.length === 0 ? (

@@ -16,6 +16,7 @@ import {
   deleteSkill,
   deleteTool,
   getProjectTranscript,
+  getRunAnalysis,
   getSkill,
   importSkillFile,
   importSkillFolder,
@@ -498,6 +499,12 @@ export function App() {
     setHistoryLoading(true);
     try {
       const transcript = await getProjectTranscript(nextProjectId);
+      const latestCompletedRun = [...transcript.runs]
+        .reverse()
+        .find((run) => run.status === "completed");
+      const restoredAnalysis = latestCompletedRun
+        ? await getRunAnalysis(latestCompletedRun.id).catch(() => null)
+        : null;
       const nextProfiles =
         transcript.runs[0]?.profiles.map(({ output_text, steps, ...profile }) => profile) ??
         profilesForSurface(transcript.project.surface_type);
@@ -541,7 +548,7 @@ export function App() {
       setAgentSteps(nextAgentSteps);
       setTurnCount(transcript.runs.length);
       setInputMode(transcript.runs.length > 0 ? "independent" : "integrated");
-      setAnalysis(null);
+      setAnalysis(restoredAnalysis);
       window.localStorage.setItem(activeProjectStorageKey, transcript.project.id);
       setHistoryOpen(false);
     } finally {
@@ -1122,7 +1129,13 @@ export function App() {
         />
       ) : null}
       {surfaceType === "agent" ? (
-        <AgentWorkspace profiles={profiles} profileState={profileState} steps={agentSteps} />
+        <AgentWorkspace
+          profiles={profiles}
+          profileState={profileState}
+          steps={agentSteps}
+          analysis={analysis}
+          model={model}
+        />
       ) : (
         <section className="workspace" aria-label="HarnessDiff chat comparison">
           {profiles.map((profile) => (

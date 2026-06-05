@@ -4,6 +4,7 @@ import asyncio
 import base64
 
 from app.models.run import RunAttachment
+from app.services import pdf_attachments
 from app.services.pdf_attachments import (
     PdfAttachmentToolRuntime,
     build_pdf_context_prompt,
@@ -267,6 +268,54 @@ def test_pdf_attachment_tools_support_grep_and_progressive_blocks(tmp_path) -> N
     assert read_result.ok is True
     assert read_result.result["page_refs"] == [1]
     assert "HarnessDiff PDF needle" in read_result.result["content"]
+
+
+def test_pdf_attachment_extraction_replaces_invalid_surrogates(
+    tmp_path, monkeypatch
+) -> None:
+    def fake_extract_pages(data: bytes):
+        return (
+            [
+                {
+                    "page_number": 1,
+                    "text": "Valid text before \udc00 invalid low surrogate\nneedle\ud800",
+                }
+            ],
+            "pypdf",
+        )
+
+    monkeypatch.setattr(pdf_attachments, "_extract_pages_with_pypdf", fake_extract_pages)
+    monkeypatch.setattr(
+        pdf_attachments,
+        "_extract_pages_with_pymupdf",
+        lambda data: ([], "pypdf"),
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    attachments = prepare_pdf_attachments(
+        [
+            RunAttachment(
+                kind="pdf",
+                id="pdf_bad_unicode",
+                name="bad-unicode.pdf",
+                mime_type="application/pdf",
+                size_bytes=12,
+                data_base64=base64.b64encode(b"fake-pdf").decode("ascii"),
+            )
+        ],
+        run_dir=run_dir,
+    )
+
+    attachment = attachments[0]
+    text = (run_dir / attachment.text_path).read_text(encoding="utf-8")
+    lines = (run_dir / attachment.line_index_path).read_text(encoding="utf-8")
+    blocks = (run_dir / attachment.block_index_path).read_text(encoding="utf-8")
+    assert "\udc00" not in text
+    assert "\ud800" not in text
+    assert "\uFFFD" in text
+    assert "\uFFFD" in lines
+    assert "\uFFFD" in blocks
 
 
 def _minimal_pdf_bytes() -> bytes:

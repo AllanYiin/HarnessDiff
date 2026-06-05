@@ -54,6 +54,10 @@ body {
   overflow: hidden;
 }
 
+.shell:has(.attachmentStrip) {
+  --composer-height: 176px;
+}
+
 .topBar,
 .composer {
   display: flex;
@@ -863,6 +867,14 @@ textarea:disabled,
   margin: 0;
 }
 
+.profileHeaderActions {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .profileStatus {
   flex: 0 0 auto;
   border-radius: 999px;
@@ -876,6 +888,148 @@ textarea:disabled,
   border-color: var(--color-action);
   color: var(--color-action);
   background: #eff6ff;
+}
+
+.contextLoadIndicator {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.contextRingButton {
+  width: 36px;
+  height: 36px;
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text);
+  padding: 0;
+}
+
+.contextRingButton:focus-visible {
+  outline: 2px solid var(--color-action);
+  outline-offset: 2px;
+}
+
+.contextRing {
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at center, #ffffff 48%, transparent 50%),
+    conic-gradient(var(--color-harness) var(--context-ring-deg), #e2e8f0 0);
+  box-shadow: inset 0 0 0 1px rgb(15 23 42 / 0.08);
+}
+
+.contextRingButton.watch .contextRing {
+  background:
+    radial-gradient(circle at center, #ffffff 48%, transparent 50%),
+    conic-gradient(var(--color-warn) var(--context-ring-deg), #e2e8f0 0);
+}
+
+.contextRingButton.compressSoon .contextRing {
+  background:
+    radial-gradient(circle at center, #ffffff 48%, transparent 50%),
+    conic-gradient(var(--color-danger) var(--context-ring-deg), #e2e8f0 0);
+}
+
+.contextRingText {
+  position: absolute;
+  color: var(--color-muted);
+  font-size: 9px;
+  font-weight: 750;
+  line-height: 1;
+}
+
+.contextPopover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 22;
+  width: min(340px, calc(100vw - 32px));
+  display: none;
+  gap: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-panel);
+  background: var(--color-surface);
+  box-shadow: 0 18px 44px rgb(15 23 42 / 0.16);
+  padding: var(--space-3);
+}
+
+.contextLoadIndicator:hover .contextPopover,
+.contextLoadIndicator:focus-within .contextPopover,
+.contextLoadIndicator.isOpen .contextPopover {
+  display: grid;
+}
+
+.contextPopoverHeader,
+.contextPopoverFooter,
+.contextLegendRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.contextPopoverHeader strong {
+  font-size: 13px;
+}
+
+.contextPopoverHeader span,
+.contextPopoverFooter,
+.contextLegendMeta {
+  color: var(--color-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.contextWaffle {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 3px;
+  width: 148px;
+  aspect-ratio: 1;
+}
+
+.contextWaffle span {
+  border-radius: 3px;
+}
+
+.contextLegend {
+  max-height: 188px;
+  display: grid;
+  gap: 6px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.contextLegendRow {
+  min-height: 22px;
+}
+
+.contextLegendSwatch {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  border-radius: 2px;
+}
+
+.contextLegendLabel {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contextPopoverFooter {
+  border-top: 1px solid #e2e8f0;
+  padding-top: var(--space-2);
 }
 
 .messageList {
@@ -1543,6 +1697,8 @@ textarea:disabled,
 
 .attachmentStrip {
   width: 100%;
+  flex: 0 0 auto;
+  min-height: 38px;
   display: flex;
   gap: var(--space-2);
   overflow-x: auto;
@@ -1550,7 +1706,8 @@ textarea:disabled,
 }
 
 .attachmentPreview {
-  min-width: 0;
+  flex: 0 0 auto;
+  min-width: min(180px, 72vw);
   max-width: 220px;
   height: 36px;
   display: inline-flex;
@@ -1832,6 +1989,20 @@ select:focus {
   .composerTools {
     width: 100%;
     flex-wrap: wrap;
+  }
+
+  .profileHeader {
+    align-items: flex-start;
+  }
+
+  .profileHeaderActions {
+    align-items: flex-end;
+    flex-direction: column;
+  }
+
+  .contextPopover {
+    right: 0;
+    width: min(320px, calc(100vw - 24px));
   }
 
   .skillPanel {
