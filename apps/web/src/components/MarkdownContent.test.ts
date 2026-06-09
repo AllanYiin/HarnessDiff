@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { createElement } from "react";
 import mermaid from "mermaid";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MarkdownContent, splitRequestedSkillDetails } from "./MarkdownContent";
 
@@ -17,6 +17,10 @@ vi.mock("mermaid", () => ({
 }));
 
 describe("MarkdownContent skill disclosure parsing", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -74,5 +78,41 @@ describe("MarkdownContent skill disclosure parsing", () => {
         "flowchart LR\n  A[Start] --> B[Done]"
       );
     });
+  });
+
+  it("renders svg code fences as sandboxed previews", () => {
+    render(
+      createElement(MarkdownContent, {
+        source: [
+          "```svg",
+          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">',
+          '<circle cx="5" cy="5" r="4" />',
+          "</svg>",
+          "```"
+        ].join("\n")
+      })
+    );
+
+    const frame = screen.getByTitle("SVG code preview");
+    expect(frame.getAttribute("sandbox")).toBe("");
+    expect(frame.getAttribute("srcdoc")).toContain("<svg");
+  });
+
+  it("renders unlabeled svg fences as sandboxed previews", () => {
+    render(
+      createElement(MarkdownContent, {
+        source: [
+          "```",
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"></svg>',
+          "```"
+        ].join("\n")
+      })
+    );
+
+    const frame = screen.getByTitle("SVG code preview");
+    expect(frame.getAttribute("sandbox")).toBe("");
+    expect(frame.getAttribute("srcdoc")).toContain("<svg");
+    expect(frame.getAttribute("srcdoc")).not.toContain("<?xml");
   });
 });

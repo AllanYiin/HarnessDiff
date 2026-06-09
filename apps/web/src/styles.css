@@ -1899,6 +1899,23 @@ textarea:disabled,
   font-weight: 700;
 }
 
+.svgCodePreview {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.svgCodePreviewFrame {
+  display: block;
+  width: 100%;
+  min-height: 360px;
+  border: 0;
+  background: #ffffff;
+}
+
 .analysisSummary {
   display: flex;
   align-items: center;

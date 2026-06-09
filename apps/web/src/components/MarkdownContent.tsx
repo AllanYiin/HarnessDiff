@@ -40,6 +40,24 @@ function isSafeUrl(url: string) {
   return /^(https?:|mailto:)/i.test(url);
 }
 
+function isSvgSource(source: string) {
+  return /^\s*(?:<\?xml[^>]*>\s*)?<svg[\s>]/i.test(source);
+}
+
+function svgPreviewDocument(source: string) {
+  const svg = source.replace(/^\s*<\?xml[^>]*>\s*/i, "");
+  return [
+    "<!doctype html>",
+    '<html><head><meta charset="utf-8"><style>',
+    "html,body{width:100%;height:100%;margin:0;background:#fff;overflow:auto;}",
+    "body{display:grid;place-items:center;padding:12px;box-sizing:border-box;}",
+    "svg{max-width:100%;height:auto;}",
+    "</style></head><body>",
+    svg,
+    "</body></html>"
+  ].join("");
+}
+
 function renderInline(text: string, keyPrefix: string): ReactNode[] {
   const nodes: ReactNode[] = [];
   let lastIndex = 0;
@@ -269,8 +287,12 @@ function renderMarkdownBlocks(source: string, keyPrefix: string) {
       return <blockquote key={key}>{renderInlineWithBreaks(block.text, `quote-${key}`)}</blockquote>;
     }
     if (block.type === "code") {
-      if ((block.language ?? "").toLowerCase() === "mermaid") {
+      const language = (block.language ?? "").toLowerCase();
+      if (language === "mermaid") {
         return <MermaidDiagram code={block.code} key={key} />;
+      }
+      if (language === "svg" || isSvgSource(block.code)) {
+        return <SvgCodePreview code={block.code} key={key} />;
       }
       return (
         <pre key={key}>
@@ -337,6 +359,19 @@ function renderSkillDisclosure(details: RequestedSkillDetail[], key: string) {
         ))}
       </div>
     </details>
+  );
+}
+
+function SvgCodePreview({ code }: { code: string }) {
+  return (
+    <figure className="svgCodePreview">
+      <iframe
+        className="svgCodePreviewFrame"
+        sandbox=""
+        srcDoc={svgPreviewDocument(code)}
+        title="SVG code preview"
+      />
+    </figure>
   );
 }
 
