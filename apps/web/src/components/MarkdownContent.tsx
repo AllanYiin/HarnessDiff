@@ -44,9 +44,9 @@ function isSvgSource(source: string) {
   return normalizedSvgSource(source).toLowerCase().startsWith("<svg");
 }
 
-function isCompleteSvgSource(source: string) {
+function canPreviewSvgSource(source: string) {
   const svg = normalizedSvgSource(source);
-  return /^<svg[\s\S]*\/>\s*$/i.test(svg) || /<\/svg>\s*$/i.test(svg);
+  return isSvgSource(source) && findSvgStartTagEnd(svg) !== -1;
 }
 
 function normalizedSvgSource(source: string) {
@@ -54,7 +54,7 @@ function normalizedSvgSource(source: string) {
 }
 
 function svgPreviewDocument(source: string) {
-  const svg = normalizedSvgSource(source);
+  const svg = normalizeStreamingSvgSource(source);
   return [
     "<!doctype html>",
     '<html><head><meta charset="utf-8"><style>',
@@ -65,6 +65,55 @@ function svgPreviewDocument(source: string) {
     svg,
     "</body></html>"
   ].join("");
+}
+
+function normalizeStreamingSvgSource(source: string) {
+  const svg = normalizedSvgSource(source);
+  if (/<\/svg>\s*$/i.test(svg)) {
+    return svg;
+  }
+
+  const startTagEnd = findSvgStartTagEnd(svg);
+  if (startTagEnd === -1) {
+    return svg;
+  }
+
+  const startTag = svg.slice(0, startTagEnd + 1);
+  if (/\/>\s*$/.test(startTag)) {
+    return startTag;
+  }
+
+  const body = trimDanglingSvgMarkup(svg.slice(startTagEnd + 1));
+  return `${startTag}${body}</svg>`;
+}
+
+function findSvgStartTagEnd(svg: string) {
+  let quote: string | null = null;
+  for (let index = 0; index < svg.length; index += 1) {
+    const char = svg[index];
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === ">") {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function trimDanglingSvgMarkup(svgBody: string) {
+  const closeIndex = svgBody.search(/<\/svg>/i);
+  const body = closeIndex === -1 ? svgBody : svgBody.slice(0, closeIndex);
+  const lastOpen = body.lastIndexOf("<");
+  const lastClose = body.lastIndexOf(">");
+  return lastOpen > lastClose ? body.slice(0, lastOpen) : body;
 }
 
 function renderInline(text: string, keyPrefix: string): ReactNode[] {
@@ -300,7 +349,7 @@ function renderMarkdownBlocks(source: string, keyPrefix: string) {
       if (language === "mermaid") {
         return <MermaidDiagram code={block.code} key={key} />;
       }
-      if ((language === "svg" || isSvgSource(block.code)) && isCompleteSvgSource(block.code)) {
+      if ((language === "svg" || isSvgSource(block.code)) && canPreviewSvgSource(block.code)) {
         return <SvgCodePreview code={block.code} key={key} />;
       }
       return (
@@ -372,13 +421,14 @@ function renderSkillDisclosure(details: RequestedSkillDetail[], key: string) {
 }
 
 function SvgCodePreview({ code }: { code: string }) {
+  const previewDocument = svgPreviewDocument(code);
   return (
     <figure className="svgCodePreview">
       <iframe
         className="svgCodePreviewFrame"
-        key={hashString(code)}
+        key={hashString(previewDocument)}
         sandbox=""
-        srcDoc={svgPreviewDocument(code)}
+        srcDoc={previewDocument}
         title="SVG code preview"
       />
     </figure>

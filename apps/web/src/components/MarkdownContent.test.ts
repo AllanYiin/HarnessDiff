@@ -116,10 +116,10 @@ describe("MarkdownContent skill disclosure parsing", () => {
     expect(frame.getAttribute("srcdoc")).not.toContain("<?xml");
   });
 
-  it("keeps streaming incomplete svg fences as code until the svg closes", () => {
+  it("previews streaming svg fences after the svg root tag closes", () => {
     const { rerender } = render(
       createElement(MarkdownContent, {
-        source: ["```svg", '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">'].join(
+        source: ["```svg", '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"'].join(
           "\n"
         )
       })
@@ -133,13 +133,14 @@ describe("MarkdownContent skill disclosure parsing", () => {
         source: [
           "```svg",
           '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">',
-          '<circle cx="5" cy="5" r="4" />',
-          "</svg>"
+          '<circle cx="5" cy="5" r="4" />'
         ].join("\n")
       })
     );
 
-    expect(screen.getByTitle("SVG code preview").getAttribute("srcdoc")).toContain("<circle");
+    const frame = screen.getByTitle("SVG code preview");
+    expect(frame.getAttribute("srcdoc")).toContain("<circle");
+    expect(frame.getAttribute("srcdoc")).toContain("</svg>");
   });
 
   it("remounts the svg preview frame when streaming updates the svg body", () => {
@@ -169,5 +170,23 @@ describe("MarkdownContent skill disclosure parsing", () => {
     const updatedFrame = screen.getByTitle("SVG code preview");
     expect(updatedFrame).not.toBe(firstFrame);
     expect(updatedFrame.getAttribute("srcdoc")).toContain("<rect");
+  });
+
+  it("keeps completed streaming shapes visible while the next svg tag is incomplete", () => {
+    render(
+      createElement(MarkdownContent, {
+        source: [
+          "```svg",
+          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">',
+          '<circle cx="5" cy="5" r="4" />',
+          '<rect width="'
+        ].join("\n")
+      })
+    );
+
+    const frame = screen.getByTitle("SVG code preview");
+    expect(frame.getAttribute("srcdoc")).toContain("<circle");
+    expect(frame.getAttribute("srcdoc")).not.toContain("<rect");
+    expect(frame.getAttribute("srcdoc")).toContain("</svg>");
   });
 });
