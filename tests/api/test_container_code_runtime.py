@@ -4,7 +4,12 @@ import os
 
 import pytest
 
-from app.services.container_code_runtime import ContainerCodeExecutor, _limit_text
+from app.services.container_code_runtime import (
+    ContainerCodeExecutor,
+    DockerCodeExecutor,
+    MxcCodeExecutor,
+    _limit_text,
+)
 
 
 def test_container_code_runtime_builds_offline_constrained_docker_args(tmp_path) -> None:
@@ -61,6 +66,58 @@ def test_container_code_runtime_host_env_omits_sensitive_values(tmp_path, monkey
     assert "sample.py" not in ignored
 
 
+def test_mxc_policy_blocks_network_and_marks_temp_workspace(tmp_path) -> None:
+    executor = ContainerCodeExecutor(tmp_path)
+    policy = executor.build_mxc_policy(
+        workspace=tmp_path,
+        command="python --version",
+        workdir=".",
+        timeout_seconds=120,
+    )
+
+    assert policy["version"] == "0.6.0-alpha"
+    assert policy["containment"] == "process"
+    assert policy["network"]["defaultPolicy"] == "block"
+    assert policy["fallback"]["allowDaclMutation"] is False
+    assert str(tmp_path.resolve()) in policy["filesystem"]["readwritePaths"]
+    assert policy["process"]["timeout"] == 120_000
+    assert "powershell" not in policy["process"]["commandLine"].lower()
+
+
+def test_explicit_mxc_requires_experimental_opt_in(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("HARNESSDIFF_CODE_RUNTIME_BACKEND", "mxc")
+    monkeypatch.delenv("HARNESSDIFF_MXC_EXPERIMENTAL", raising=False)
+    executor = ContainerCodeExecutor(tmp_path)
+
+    result = executor.run("python --version")
+
+    assert result["exit_code"] == 127
+    assert result["runtime_backend"] == "mxc"
+    assert result["error"]["type"] == "mxc_runtime_unavailable"
+    assert "HARNESSDIFF_MXC_EXPERIMENTAL" in result["stderr"]
+    assert result["preview_warning"]
+    assert "mxc_preview_not_security_boundary" in result["enforcement_gaps"]
+
+
+def test_auto_backend_falls_back_to_docker_with_policy_metadata(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("HARNESSDIFF_CODE_RUNTIME_BACKEND", "auto")
+    monkeypatch.setenv("HARNESSDIFF_MXC_EXPERIMENTAL", "1")
+    executor = ContainerCodeExecutor(tmp_path)
+    executor.mxc_backend = UnavailableMxcBackend(tmp_path)
+    executor.docker_backend = FakeDockerBackend(tmp_path)
+
+    result = executor.run("python --version")
+
+    assert result["exit_code"] == 0
+    assert result["runtime_backend"] == "docker"
+    assert result["requested_backend"] == "auto"
+    assert result["runtime_fallback"]["from"] == "mxc"
+    assert result["runtime_fallback"]["to"] == "docker"
+    assert result["runtime_fallback"]["same_or_stricter_data_policy"] is True
+    assert result["policy_hash"]
+    assert result["containment"]["limits"]["timeout_seconds"] == 120
+
+
 def test_container_code_runtime_truncates_long_output() -> None:
     text, truncated = _limit_text("x" * 13000)
 
@@ -88,3 +145,40 @@ def test_container_code_runtime_docker_smoke_python_node_pnpm(tmp_path) -> None:
     assert result["exit_code"] == 0
     assert "Python" in result["stdout"]
     assert "v" in result["stdout"]
+
+
+class UnavailableMxcBackend(MxcCodeExecutor):
+    def __init__(self, root):
+        super().__init__(root, runner=root / "missing-mxc-runner.mjs")
+
+    def status(self) -> dict:
+        return {"available": False, "message": "MXC unavailable for test"}
+
+
+class FakeDockerBackend(DockerCodeExecutor):
+    def __init__(self, root):
+        super().__init__(root)
+
+    def run_workspace(self, *, workspace, command, workdir, timeout_seconds, started):
+        containment = {
+            "backend": "docker",
+            "network": "none",
+            "filesystem": {"original_workspace_writeback": "none"},
+            "limits": {"timeout_seconds": timeout_seconds},
+        }
+        return {
+            "command": command,
+            "workdir": workdir,
+            "exit_code": 0,
+            "stdout": "Python 3.x",
+            "stderr": "",
+            "truncated": False,
+            "elapsed_ms": 0,
+            "image": "fake",
+            "network": "none",
+            "runtime_backend": "docker",
+            "containment": containment,
+            "policy_hash": "fake-hash",
+            "enforcement_gaps": [],
+            "preview_warning": "",
+        }

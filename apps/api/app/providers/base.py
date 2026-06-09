@@ -59,6 +59,7 @@ class LLMRequest:
     prompt_cache_key: str = ""
     tools_enabled: bool = False
     tool_context: ToolRuntime | None = None
+    execution_policy: dict[str, Any] = field(default_factory=dict)
     subagent_id: str | None = None
     subagent_label: str | None = None
     parent_profile_id: str | None = None

@@ -26,3 +26,5 @@ def test_health_route_returns_stage0_metadata(tmp_path) -> None:
     assert isinstance(body["tools"]["web_search_configured"], bool)
     assert isinstance(body["tools"]["container_runtime"]["docker_found"], bool)
     assert body["tools"]["container_runtime"]["image"] == "harnessdiff-code-runtime:latest"
+    assert body["tools"]["container_runtime"]["backend_mode"] == "docker"
+    assert body["tools"]["container_runtime"]["selected_backend"] == "docker"

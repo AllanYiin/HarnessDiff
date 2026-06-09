@@ -145,6 +145,33 @@ def test_openai_stream_kwargs_can_include_tools() -> None:
     assert kwargs["tools"] == tools
 
 
+def test_openai_stream_kwargs_can_include_required_tool_choice() -> None:
+    request = LLMRequest(
+        profile_id="harness",
+        profile_label="Harness",
+        model="gpt-5.4-mini",
+        reasoning_effort="medium",
+        instructions="test",
+        prompt="hello",
+    )
+    tools = [
+        {
+            "type": "function",
+            "name": "standard_code_container_exec",
+            "parameters": {"type": "object"},
+        }
+    ]
+    tool_choice = {
+        "type": "allowed_tools",
+        "mode": "required",
+        "tools": [{"type": "function", "name": "standard_code_container_exec"}],
+    }
+
+    kwargs = _build_stream_kwargs(request, tools=tools, tool_choice=tool_choice)
+
+    assert kwargs["tool_choice"] == tool_choice
+
+
 def test_openai_stream_kwargs_sends_prompt_cache_key_in_extra_body() -> None:
     request = LLMRequest(
         profile_id="harness",
@@ -324,6 +351,124 @@ def test_openai_provider_executes_function_call_and_resumes_with_tool_output() -
     ]
     assert "status" not in client.calls[1]["input"][0]
     assert '"ok": true' in client.calls[1]["input"][0]["output"]
+
+
+def test_openai_provider_forces_required_code_execution_tool_choice() -> None:
+    runtime = FakeCodeToolRuntime()
+    client = FakeOpenAIClient(
+        [
+            [
+                SimpleNamespace(
+                    type="response.completed",
+                    response=SimpleNamespace(
+                        id="resp_tool",
+                        output=[
+                            {
+                                "type": "function_call",
+                                "name": "standard_code_container_exec",
+                                "call_id": "call_code",
+                                "arguments": '{"command":"pytest"}',
+                            }
+                        ],
+                    ),
+                )
+            ],
+            [
+                SimpleNamespace(type="response.output_text.delta", delta="verified"),
+                SimpleNamespace(
+                    type="response.completed",
+                    response=SimpleNamespace(id="resp_final", output=[]),
+                ),
+            ],
+        ]
+    )
+    provider = OpenAIResponsesProvider(api_key="test", client_factory=lambda: client)
+    request = LLMRequest(
+        profile_id="harness",
+        profile_label="Harness",
+        model="fake-model",
+        reasoning_effort="medium",
+        instructions="test",
+        prompt="請修改並跑測試",
+        tools_enabled=True,
+        tool_context=runtime,
+        execution_policy={
+            "requires_execution_evidence": True,
+            "required_tool_names": ["standard.code.container_exec"],
+        },
+    )
+
+    events = asyncio.run(_collect_provider_events(provider, request))
+
+    assert client.calls[0]["tool_choice"] == {
+        "type": "allowed_tools",
+        "mode": "required",
+        "tools": [{"type": "function", "name": "standard_code_container_exec"}],
+    }
+    assert "tool_choice" not in client.calls[1]
+    assert runtime.calls == [("standard_code_container_exec", {"command": "pytest"})]
+    assert any(event.type == "tool_call" for event in events)
+
+
+def test_openai_provider_retries_once_when_required_execution_is_missing() -> None:
+    runtime = FakeCodeToolRuntime()
+    client = FakeOpenAIClient(
+        [
+            [
+                SimpleNamespace(
+                    type="response.completed",
+                    response=SimpleNamespace(id="resp_text", output=[]),
+                )
+            ],
+            [
+                SimpleNamespace(
+                    type="response.completed",
+                    response=SimpleNamespace(
+                        id="resp_tool",
+                        output=[
+                            {
+                                "type": "function_call",
+                                "name": "standard_code_container_exec",
+                                "call_id": "call_code",
+                                "arguments": '{"command":"pytest"}',
+                            }
+                        ],
+                    ),
+                )
+            ],
+            [
+                SimpleNamespace(type="response.output_text.delta", delta="done"),
+                SimpleNamespace(
+                    type="response.completed",
+                    response=SimpleNamespace(id="resp_final", output=[]),
+                ),
+            ],
+        ]
+    )
+    provider = OpenAIResponsesProvider(api_key="test", client_factory=lambda: client)
+    request = LLMRequest(
+        profile_id="harness",
+        profile_label="Harness",
+        model="fake-model",
+        reasoning_effort="medium",
+        instructions="test",
+        prompt="請修改",
+        tools_enabled=True,
+        tool_context=runtime,
+        execution_policy={
+            "requires_execution_evidence": True,
+            "required_tool_names": ["standard.code.container_exec"],
+        },
+    )
+
+    asyncio.run(_collect_provider_events(provider, request))
+
+    assert client.calls[0]["tool_choice"]["mode"] == "required"
+    assert client.calls[1]["previous_response_id"] == "resp_text"
+    assert client.calls[1]["tool_choice"]["mode"] == "required"
+    assert client.calls[1]["input"][0]["role"] == "user"
+    assert "Execution evidence is required" in client.calls[1]["input"][0]["content"]
+    assert runtime.calls == [("standard_code_container_exec", {"command": "pytest"})]
 
 
 def test_openai_provider_enriches_web_tool_output_with_citation_sources() -> None:
@@ -513,6 +658,28 @@ class FakeToolRuntime:
 
     def list_tool_names(self) -> tuple[str, ...]:
         return ("standard.fs.read",)
+
+    async def invoke_openai_tool(self, openai_name: str, arguments: dict) -> FakeInvocation:
+        self.calls.append((openai_name, arguments))
+        return FakeInvocation(openai_name, arguments)
+
+
+class FakeCodeToolRuntime:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def list_openai_tools(self) -> list[dict]:
+        return [
+            {
+                "type": "function",
+                "name": "standard_code_container_exec",
+                "description": "Execute code in a sandbox",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ]
+
+    def list_tool_names(self) -> tuple[str, ...]:
+        return ("standard.code.container_exec",)
 
     async def invoke_openai_tool(self, openai_name: str, arguments: dict) -> FakeInvocation:
         self.calls.append((openai_name, arguments))

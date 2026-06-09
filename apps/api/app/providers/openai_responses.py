@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import json
+import re
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -49,6 +50,8 @@ class OpenAIResponsesProvider(LLMProvider):
         input_override = _initial_input_items(request) if request.tools_enabled else None
         previous_response_id: str | None = None
         tool_round = 0
+        required_tool_satisfied = False
+        execution_retry_sent = False
 
         while True:
             tools = (
@@ -56,11 +59,18 @@ class OpenAIResponsesProvider(LLMProvider):
                 if request.tools_enabled and request.tool_context is not None
                 else None
             )
+            required_tool_openai_names = _required_tool_openai_names(request, tools)
+            tool_choice = (
+                _required_tool_choice(required_tool_openai_names)
+                if required_tool_openai_names and not required_tool_satisfied
+                else None
+            )
             create_kwargs = _build_stream_kwargs(
                 request,
                 input_override=input_override,
                 tools=tools,
                 previous_response_id=previous_response_id,
+                tool_choice=tool_choice,
             )
             completed_event: Any | None = None
             completed_response: Any | None = None
@@ -112,11 +122,26 @@ class OpenAIResponsesProvider(LLMProvider):
                         )
 
             function_calls = _function_calls(completed_response)
+            if required_tool_openai_names and function_calls:
+                required_tool_satisfied = any(
+                    call["name"] in required_tool_openai_names for call in function_calls
+                ) or required_tool_satisfied
             if (
                 not request.tools_enabled
                 or request.tool_context is None
                 or not function_calls
             ):
+                if (
+                    required_tool_openai_names
+                    and not required_tool_satisfied
+                    and not execution_retry_sent
+                ):
+                    execution_retry_sent = True
+                    previous_response_id = getattr(completed_response, "id", None)
+                    input_override = [
+                        _execution_required_retry_message(required_tool_openai_names)
+                    ]
+                    continue
                 if completed_event is not None:
                     yield ProviderEvent(
                         type="completed",
@@ -270,6 +295,7 @@ def _build_stream_kwargs(
     input_override: Any | None = None,
     tools: list[dict[str, Any]] | None = None,
     previous_response_id: str | None = None,
+    tool_choice: Any | None = None,
 ) -> dict[str, Any]:
     input_payload: Any
     if input_override is not None:
@@ -294,9 +320,82 @@ def _build_stream_kwargs(
         ] = request.prompt_cache_key
     if tools:
         create_kwargs["tools"] = tools
+    if tool_choice is not None:
+        create_kwargs["tool_choice"] = tool_choice
     if previous_response_id:
         create_kwargs["previous_response_id"] = previous_response_id
     return create_kwargs
+
+
+def _required_tool_openai_names(
+    request: LLMRequest, tools: list[dict[str, Any]] | None
+) -> tuple[str, ...]:
+    policy = request.execution_policy or {}
+    if not policy.get("requires_execution_evidence") or not tools:
+        return ()
+    available = {
+        str(tool.get("name") or "")
+        for tool in tools
+        if isinstance(tool, dict) and tool.get("type") == "function"
+    }
+    required: list[str] = []
+    for tool_name in policy.get("required_tool_names") or ():
+        for candidate in _candidate_openai_names(request, str(tool_name)):
+            if candidate in available and candidate not in required:
+                required.append(candidate)
+                break
+    return tuple(required)
+
+
+def _candidate_openai_names(request: LLMRequest, tool_name: str) -> tuple[str, ...]:
+    candidates: list[str] = []
+    for source in (
+        request.tool_context,
+        getattr(request.tool_context, "standard_runtime", None),
+    ):
+        converter = getattr(source, "to_openai_name", None)
+        if callable(converter):
+            try:
+                converted = str(converter(tool_name))
+            except Exception:
+                converted = ""
+            if converted and converted not in candidates:
+                candidates.append(converted)
+    fallback = _fallback_openai_tool_name(tool_name)
+    for candidate in (fallback, tool_name):
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+    return tuple(candidates)
+
+
+def _fallback_openai_tool_name(tool_name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_]", "_", tool_name).strip("_")
+
+
+def _required_tool_choice(required_tool_openai_names: tuple[str, ...]) -> dict[str, Any]:
+    return {
+        "type": "allowed_tools",
+        "mode": "required",
+        "tools": [
+            {"type": "function", "name": name}
+            for name in required_tool_openai_names
+        ],
+    }
+
+
+def _execution_required_retry_message(
+    required_tool_openai_names: tuple[str, ...]
+) -> dict[str, str]:
+    tool_text = ", ".join(required_tool_openai_names)
+    return {
+        "role": "user",
+        "content": (
+            "Execution evidence is required before the final answer. "
+            f"Call the required code execution function now: {tool_text}. "
+            "Use a concrete command that validates the implementation, test, build, "
+            "or runtime behavior. If execution fails, report the failure evidence."
+        ),
+    }
 
 
 def _skill_selector_instructions(max_selected: int) -> str:

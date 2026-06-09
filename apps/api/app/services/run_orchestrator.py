@@ -22,6 +22,11 @@ from app.services.chat_tool_runtime import ChatToolRuntime
 from app.services.chat_tool_runtime import PARALLEL_TOOL_NAME
 from app.services.container_code_runtime import CONTAINER_CODE_TOOL_NAME
 from app.services.context_builder import build_instructions
+from app.services.execution_policy import (
+    apply_execution_policy_instructions,
+    build_code_execution_policy,
+    execution_policy_task_text,
+)
 from app.services.harnessable_control import HarnessableControlPlane
 from app.services.pdf_attachments import PdfAttachmentToolRuntime, build_pdf_context_prompt
 from app.services.skill_store import (
@@ -174,6 +179,15 @@ class RunOrchestrator:
                     if active_tool_runtime is not None
                     else ()
                 )
+                execution_policy = build_code_execution_policy(
+                    task_text=execution_policy_task_text(run.prompt, conversation_messages),
+                    harness_modules=profile.harness_modules,
+                    tool_names=tool_names,
+                    surface="chat",
+                )
+                instructions = apply_execution_policy_instructions(
+                    instructions, execution_policy
+                )
                 prompt_cache_key = _prompt_cache_key(run.project_id, profile.id)
                 image_attachments = tuple(
                     LLMImageAttachment(
@@ -198,6 +212,7 @@ class RunOrchestrator:
                     tool_names,
                     image_attachments,
                     prompt_cache_key,
+                    execution_policy,
                 )
                 decision_sequence = 0
                 for sequence, decision in enumerate(skill_context_gate.decisions):
@@ -270,6 +285,7 @@ class RunOrchestrator:
                     prompt_cache_key=prompt_cache_key,
                     tools_enabled=active_tool_runtime is not None,
                     tool_context=active_tool_runtime,
+                    execution_policy=execution_policy,
                 )
                 async for event in self.provider.stream_text(request):
                     self.store.append_profile_event(run.project_id, run.id, profile.id, event)

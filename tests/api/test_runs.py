@@ -223,6 +223,8 @@ def test_run_stream_writes_profile_outputs_usage_and_harnessable_trace(tmp_path)
     assert "multi_tool_use.parallel" in harness_input["tool_names"]
     assert "skill_routing_review" in harness_input["tool_names"]
     assert harness_input["harness_modules"]["consequence_gate"] is True
+    assert baseline_input["execution_policy"] == {}
+    assert harness_input["execution_policy"] == {}
 
     analysis = client.get(f"/api/runs/{run['id']}/analysis")
     assert analysis.status_code == 200
@@ -244,6 +246,43 @@ def test_run_stream_writes_profile_outputs_usage_and_harnessable_trace(tmp_path)
     assert harness_tools["status"] == "sent"
     assert analysis_doc["profiles"]["harness"]["harness_decisions"]
     assert analysis_doc["comparison"]["total_token_delta"] == 0
+
+
+def test_coding_prompt_requires_execution_evidence_for_harness_only(tmp_path) -> None:
+    provider = FakeProvider()
+    client = TestClient(
+        create_app(data_dir=tmp_path, harnessdiff_home=tmp_path / ".harnessdiff", llm_provider=provider)
+    )
+    project_id = client.post("/api/projects", json={"name": "Execution evidence"}).json()["id"]
+
+    run = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "請修改 provider 程式並跑 pytest 測試",
+            "input_mode": "integrated",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+        },
+    ).json()
+
+    with client.stream("GET", f"/api/runs/{run['id']}/stream") as response:
+        assert response.status_code == 200
+        _sse_events("".join(response.iter_text()))
+
+    requests = {request.profile_id: request for request in provider.requests}
+    assert requests["baseline"].execution_policy == {}
+    assert requests["harness"].execution_policy["requires_execution_evidence"] is True
+    assert requests["harness"].execution_policy["required_tool_names"] == [
+        "standard.code.container_exec"
+    ]
+    assert "Execution evidence requirement" not in requests["baseline"].instructions
+    assert "Execution evidence requirement" in requests["harness"].instructions
+
+    run_dir = tmp_path / "projects" / project_id / "runs" / run["id"]
+    baseline_input = json.loads((run_dir / "baseline" / "input.json").read_text(encoding="utf-8"))
+    harness_input = json.loads((run_dir / "harness" / "input.json").read_text(encoding="utf-8"))
+    assert baseline_input["execution_policy"] == {}
+    assert harness_input["execution_policy"]["requires_execution_evidence"] is True
 
 
 def test_harness_consequence_gate_records_publication_preflight(tmp_path) -> None:

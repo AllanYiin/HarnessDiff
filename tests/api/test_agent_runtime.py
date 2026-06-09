@@ -331,6 +331,45 @@ def test_agent_tool_policy_keeps_high_risk_tools_harness_only(tmp_path) -> None:
     assert "skill_routing_review" in harness_tools
 
 
+def test_agent_coding_prompt_requires_execution_evidence_for_harness_agent_only(
+    tmp_path,
+) -> None:
+    provider = FakeAgentProvider()
+    client = TestClient(
+        create_app(data_dir=tmp_path, harnessdiff_home=tmp_path / ".harnessdiff", llm_provider=provider)
+    )
+    project_id = client.post(
+        "/api/projects", json={"name": "Agent execution", "surface_type": "agent"}
+    ).json()["id"]
+    run = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "請修改 provider 程式並跑 pytest 測試",
+            "input_mode": "integrated",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+        },
+    ).json()
+
+    with client.stream("GET", f"/api/runs/{run['id']}/stream") as response:
+        assert response.status_code == 200
+        _sse_events("".join(response.iter_text()))
+
+    requests = {request.profile_id: request for request in provider.requests}
+    assert requests["baseline_agent"].execution_policy == {}
+    assert requests["harness_agent"].execution_policy["requires_execution_evidence"] is True
+    assert requests["harness_agent"].execution_policy["surface"] == "agent"
+    assert "Execution evidence requirement" in requests["harness_agent"].instructions
+
+    run_dir = tmp_path / "projects" / project_id / "runs" / run["id"]
+    harness_input = json.loads(
+        (run_dir / "harness_agent" / "input.json").read_text(encoding="utf-8")
+    )
+    assert harness_input["execution_policy"]["required_tool_names"] == [
+        "standard.code.container_exec"
+    ]
+
+
 def test_agent_tool_call_is_recorded_as_step_trace(tmp_path) -> None:
     provider = ToolCallingAgentProvider()
     client = TestClient(

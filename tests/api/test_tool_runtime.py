@@ -154,6 +154,9 @@ def test_tool_runtime_invokes_container_code_tool_validation(tmp_path) -> None:
     assert result.ok is True
     assert result.result["exit_code"] == 127
     assert result.result["error"]["type"] == "invalid_workdir"
+    assert result.result["runtime_backend"] in {"docker", "mxc", "auto"}
+    assert "containment" in result.result
+    assert "enforcement_gaps" in result.result
 
 
 def test_tool_runtime_readonly_bash_rejects_mutation_and_escape(tmp_path) -> None:

@@ -338,6 +338,7 @@ class ProjectStore:
         tool_names: tuple[str, ...] = (),
         image_attachments: tuple[LLMImageAttachment, ...] = (),
         prompt_cache_key: str = "",
+        execution_policy: dict[str, Any] | None = None,
     ) -> None:
         profile_dir = self._run_dir(project_id, run_id) / profile_id
         profile_dir.mkdir(parents=True, exist_ok=True)
@@ -353,6 +354,7 @@ class ProjectStore:
                 "conversation_messages": list(conversation_messages),
                 "prompt_cache_key": prompt_cache_key,
                 "tool_names": list(tool_names),
+                "execution_policy": execution_policy or {},
                 "attachments": [
                     {
                         "kind": "image",

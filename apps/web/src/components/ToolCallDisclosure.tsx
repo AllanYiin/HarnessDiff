@@ -31,6 +31,7 @@ export function ToolCallDisclosure({ toolCall, index }: ToolCallDisclosureProps)
   const statusLabel = toolCall.ok === false ? "失敗" : "完成";
   const name = toolCall.tool_name || toolCall.openai_name || "unknown_tool";
   const tokenLabel = tokenUsageLabel(toolCall.token_usage);
+  const runtime = codeRuntimeMetadata(toolCall);
 
   return (
     <details className={`toolCallDisclosure ${isSubagent ? "subagentToolCall" : ""}`}>
@@ -40,6 +41,7 @@ export function ToolCallDisclosure({ toolCall, index }: ToolCallDisclosureProps)
         {isSubagent ? (
           <span className="toolCallBadge">{toolCall.subagent_label || toolCall.subagent_id || "Subagent"}</span>
         ) : null}
+        {runtime ? <span className="toolCallBadge">{runtime.label}</span> : null}
         <span className={`toolCallStatus ${toolCall.ok === false ? "failed" : ""}`}>{statusLabel}</span>
         {tokenLabel ? <span className="toolCallTokens">{tokenLabel}</span> : null}
         {typeof toolCall.elapsed_ms === "number" ? (
@@ -53,6 +55,12 @@ export function ToolCallDisclosure({ toolCall, index }: ToolCallDisclosureProps)
             <pre>{formatTokenUsage(toolCall.token_usage)}</pre>
           </section>
         ) : null}
+        {runtime ? (
+          <section>
+            <h3>執行環境</h3>
+            <pre>{formatJson(runtime.details)}</pre>
+          </section>
+        ) : null}
         <section>
           <h3>輸入引數</h3>
           <pre>{formatJson(toolCall.arguments)}</pre>
@@ -64,6 +72,53 @@ export function ToolCallDisclosure({ toolCall, index }: ToolCallDisclosureProps)
       </div>
     </details>
   );
+}
+
+function codeRuntimeMetadata(toolCall: ToolCallTrace) {
+  if (toolCall.tool_name !== "standard.code.container_exec") {
+    return null;
+  }
+  const result = parseResultSummary(toolCall.result_summary);
+  const backend = stringValue(result?.runtime_backend);
+  if (!backend) {
+    return null;
+  }
+  const fallback = result?.runtime_fallback;
+  const fallbackLabel =
+    fallback && typeof fallback === "object" && "from" in fallback && "to" in fallback
+      ? ` · fallback ${String(fallback.from)}→${String(fallback.to)}`
+      : "";
+  const preview = stringValue(result?.preview_warning);
+  return {
+    label: `${backend}${fallbackLabel}`,
+    details: {
+      runtime_backend: backend,
+      requested_backend: result?.requested_backend,
+      runtime_fallback: fallback,
+      containment: result?.containment,
+      policy_hash: result?.policy_hash,
+      enforcement_gaps: result?.enforcement_gaps,
+      preview_warning: preview || undefined
+    }
+  };
+}
+
+function parseResultSummary(summary: unknown): Record<string, unknown> | null {
+  if (!summary || typeof summary !== "string") {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(summary);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value : "";
 }
 
 function tokenUsageLabel(usage?: TokenUsageTrace) {
