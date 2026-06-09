@@ -168,24 +168,58 @@ test("attaches readable files and sends their context with the prompt", async ({
   await expect(userMessage.getByRole("img", { name: "diagram.png" })).toBeVisible();
 });
 
-test("uses browser speech recognition output as voice input", async ({ page }) => {
+test("uses recorded audio transcription output as voice input", async ({ page }) => {
+  let audioRequestContentType = "";
   await page.addInitScript(() => {
-    class MockSpeechRecognition {
-      continuous = false;
-      interimResults = false;
-      lang = "";
-      onresult: ((event: { results: Array<{ 0: { transcript: string }; isFinal: boolean }> }) => void) | null = null;
-      onerror: (() => void) | null = null;
-      onend: (() => void) | null = null;
-      start() {
-        this.onresult?.({ results: [{ 0: { transcript: "語音輸入文字" }, isFinal: true }] });
-        this.onend?.();
+    const track = { stop() {} };
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia: async () => ({ getTracks: () => [track] })
       }
+    });
+
+    class MockMediaRecorder {
+      static isTypeSupported() {
+        return true;
+      }
+      state: RecordingState = "inactive";
+      mimeType = "audio/webm";
+      ondataavailable: ((event: BlobEvent) => void) | null = null;
+      onerror: (() => void) | null = null;
+      onstop: ((event: Event) => void) | null = null;
+
+      constructor(_stream: MediaStream, options?: MediaRecorderOptions) {
+        this.mimeType = options?.mimeType || "audio/webm";
+      }
+
+      start() {
+        this.state = "recording";
+      }
+
       stop() {
-        this.onend?.();
+        if (this.state === "inactive") {
+          return;
+        }
+        this.state = "inactive";
+        const data = new Blob(["voice-bytes"], { type: this.mimeType });
+        this.ondataavailable?.({ data } as BlobEvent);
+        this.onstop?.(new Event("stop"));
       }
     }
-    window.SpeechRecognition = MockSpeechRecognition as typeof window.SpeechRecognition;
+
+    Object.defineProperty(window, "MediaRecorder", {
+      configurable: true,
+      value: MockMediaRecorder
+    });
+  });
+  await page.route("**/api/audio/transcriptions", async (route) => {
+    audioRequestContentType = route.request().headers()["content-type"] ?? "";
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ text: "語音輸入文字" })
+    });
   });
   await page.route("**/api/projects", async (route) => {
     await route.fulfill({
@@ -196,10 +230,11 @@ test("uses browser speech recognition output as voice input", async ({ page }) =
   });
 
   await page.goto("/");
-  await page.getByRole("button", { name: "Hold to voice input" }).hover();
+  await page.getByRole("button", { name: "按住開始語音輸入" }).hover();
   await page.mouse.down();
-  await expect(page.locator(".promptEditor").first()).toHaveText("語音輸入文字");
   await page.mouse.up();
+  await expect(page.locator(".promptEditor").first()).toHaveText("語音輸入文字");
+  expect(audioRequestContentType).toContain("audio/webm");
 });
 
 test("lists skills and imports a skill file", async ({ page }) => {
@@ -260,8 +295,9 @@ test("lists skills and imports a skill file", async ({ page }) => {
     buffer: Buffer.from("---\nname: demo-skill\ndescription: Demo skill description\n---\n")
   });
 
-  await expect(page.getByRole("button", { name: /demo-skill/ })).toBeVisible();
-  await page.getByRole("button", { name: /demo-skill/ }).click();
+  const importedSkillButton = page.locator(".skillSelectButton").filter({ hasText: "demo-skill" });
+  await expect(importedSkillButton).toBeVisible();
+  await importedSkillButton.click();
   await expect(page.getByLabel("完整 SKILL.md")).toContainText("Demo skill description");
   expect(importPayload?.mode).toBe("skill");
   expect(importPayload?.filename).toBe("demo.skill");
@@ -275,6 +311,9 @@ test("uses skill slash commands in the composer", async ({ page }) => {
     name: "demo-skill",
     description: "Demo skill description",
     version: "",
+    enabled: true,
+    can_toggle: true,
+    can_delete: false,
     path: "C:\\Users\\demo\\.harnessdiff\\skills\\demo-skill"
   };
 
@@ -355,6 +394,151 @@ test("uses skill slash commands in the composer", async ({ page }) => {
   await expect.poll(() => submittedPrompt).toContain("Requested skill details");
   expect(submittedPrompt).toContain("Requested skill 1: demo-skill");
   expect(submittedPrompt).toContain("# Demo workflow");
+});
+
+test("uses chat composer features on the agent surface", async ({ page }) => {
+  const submittedRuns: Array<{
+    prompt: string;
+    input_mode: string;
+    profiles: Array<{ id: string }>;
+    surface_payload?: { type?: string; objective?: string };
+  }> = [];
+  const skill = {
+    id: "demo-skill",
+    name: "demo-skill",
+    description: "Demo skill description",
+    version: "",
+    enabled: true,
+    can_toggle: true,
+    can_delete: false,
+    path: "C:\\Users\\demo\\.harnessdiff\\skills\\demo-skill"
+  };
+
+  await page.route("**/api/skills/demo-skill", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: "demo-skill",
+        path: "C:\\Users\\demo\\.harnessdiff\\skills\\demo-skill\\SKILL.md",
+        content: "---\nname: demo-skill\ndescription: Demo skill description\n---\n# Demo workflow"
+      })
+    });
+  });
+  await page.route("**/api/skills", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        home_dir: "C:\\Users\\demo\\.harnessdiff",
+        skills_dir: "C:\\Users\\demo\\.harnessdiff\\skills",
+        skills: [skill]
+      })
+    });
+  });
+  await page.route("**/api/projects", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ projects: [] })
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({ id: "proj_agent_composer", name: "Agent composer", surface_type: "agent" })
+    });
+  });
+  await page.route("**/api/projects/proj_agent_composer/runs", async (route) => {
+    const body = route.request().postDataJSON() as {
+      prompt: string;
+      input_mode: string;
+      profiles: Array<{ id: string }>;
+      surface_payload?: { type?: string; objective?: string };
+    };
+    submittedRuns.push(body);
+    const profileSuffix =
+      body.profiles.length === 1 ? body.profiles[0]?.id.replace("_agent", "") : "integrated";
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({ id: `run_agent_${profileSuffix}` })
+    });
+  });
+  await page.route("**/api/runs/run_agent_integrated/stream", async (route) => {
+    const lines = [
+      { run_id: "run_agent_integrated", profile_id: "baseline_agent", profile_label: "NoHarness Agent", type: "completed", sequence: 1 },
+      { run_id: "run_agent_integrated", profile_id: "harness_agent", profile_label: "Harness Agent", type: "completed", sequence: 1 },
+      { run_id: "run_agent_integrated", type: "run_completed" }
+    ];
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: lines.map((line) => `data: ${JSON.stringify(line)}\n\n`).join("")
+    });
+  });
+  await page.route("**/api/runs/run_agent_baseline/stream", async (route) => {
+    const lines = [
+      { run_id: "run_agent_baseline", profile_id: "baseline_agent", profile_label: "NoHarness Agent", type: "completed", sequence: 1 },
+      { run_id: "run_agent_baseline", type: "run_completed" }
+    ];
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: lines.map((line) => `data: ${JSON.stringify(line)}\n\n`).join("")
+    });
+  });
+  await page.route("**/api/runs/run_agent_harness/stream", async (route) => {
+    const lines = [
+      { run_id: "run_agent_harness", profile_id: "harness_agent", profile_label: "Harness Agent", type: "completed", sequence: 1 },
+      { run_id: "run_agent_harness", type: "run_completed" }
+    ];
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: lines.map((line) => `data: ${JSON.stringify(line)}\n\n`).join("")
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("tab", { name: "Agent" }).click();
+  await expect(page.getByRole("heading", { name: "NoHarness Agent", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "按住開始語音輸入" })).toBeVisible();
+
+  const integratedEditor = page.locator(".promptEditor").first();
+  await integratedEditor.fill("/");
+  await page.getByRole("option", { name: /demo-skill/ }).click();
+  await expect(integratedEditor.locator(".skillCommandToken")).toHaveText("/demo-skill");
+  await integratedEditor.click();
+  await page.keyboard.type("agent integrated task");
+  await page.getByRole("button", { name: "送出" }).click();
+
+  await expect.poll(() => submittedRuns.length).toBe(1);
+  expect(submittedRuns[0].input_mode).toBe("integrated");
+  expect(submittedRuns[0].profiles.map((profile) => profile.id)).toEqual([
+    "baseline_agent",
+    "harness_agent"
+  ]);
+  expect(submittedRuns[0].surface_payload?.type).toBe("agent");
+  expect(submittedRuns[0].surface_payload?.objective).toBe("/demo-skill agent integrated task");
+  expect(submittedRuns[0].prompt).toContain("Requested skill 1: demo-skill");
+
+  await page.getByRole("button", { name: "個別獨立輸入" }).click();
+  const independentEditors = page.locator(".splitInputRow .promptEditor");
+  await independentEditors.nth(0).fill("baseline agent task");
+  await independentEditors.nth(1).fill("harness agent task");
+  await page.getByRole("button", { name: "送 NoHarness Agent" }).click();
+  await page.getByRole("button", { name: "送 Harness Agent" }).click();
+
+  await expect.poll(() => submittedRuns.length).toBe(3);
+  expect(submittedRuns[1].input_mode).toBe("independent");
+  expect(submittedRuns[1].profiles.map((profile) => profile.id)).toEqual(["baseline_agent"]);
+  expect(submittedRuns[1].surface_payload?.objective).toBe("baseline agent task");
+  expect(submittedRuns[2].input_mode).toBe("independent");
+  expect(submittedRuns[2].profiles.map((profile) => profile.id)).toEqual(["harness_agent"]);
+  expect(submittedRuns[2].surface_payload?.objective).toBe("harness agent task");
 });
 
 test("allows independent panes to submit while the other pane is still running", async ({ page }) => {

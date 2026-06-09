@@ -1,23 +1,35 @@
 import { useMemo, useState, type CSSProperties } from "react";
-import type { ContextSection, ProfileAnalysis } from "../api";
+import type { ContextSection, ProfileAnalysis, SkillSummary, ToolSummary } from "../api";
+import type { ProfileInstance } from "../types";
 
 const waffleCellCount = 100;
-const defaultContextWindowTokens = 1_000_000;
+const contextWindowByModel: Record<string, number | null> = {
+  "gpt-5.4-mini": 400_000,
+  "gpt-5.4": 1_000_000,
+  "gpt-5.5": 1_000_000
+};
 
 const sectionColorByKey: Record<string, string> = {
-  system_prompt: "#2563eb",
+  agent_instructions: "#2563eb",
+  system_prompt: "#1e40af",
   tool_definitions: "#7c3aed",
-  activated_skills: "#0f766e",
-  behavior_preferences: "#d97706",
+  activated_skills: "#0e7490",
+  behavior_preferences: "#c2410c",
   harness_control_plane: "#be123c",
-  personal_memory: "#0891b2",
+  personal_memory: "#0369a1",
   current_user_turn: "#16a34a",
-  stored_conversation_history: "#64748b",
-  provider_unclassified: "#94a3b8"
+  current_agent_task: "#15803d",
+  agent_steps: "#d97706",
+  agent_step_trace: "#d97706",
+  stored_conversation_history: "#334155",
+  provider_unclassified: "#64748b"
 };
 
 type ContextLoadIndicatorProps = {
   analysis?: ProfileAnalysis;
+  profile: ProfileInstance;
+  skills: SkillSummary[];
+  tools: ToolSummary[];
   model: string;
 };
 
@@ -30,21 +42,38 @@ type ContextSlice = {
   color: string;
 };
 
-export function ContextLoadIndicator({ analysis, model }: ContextLoadIndicatorProps) {
+export function ContextLoadIndicator({ analysis, profile, skills, tools, model }: ContextLoadIndicatorProps) {
   const [open, setOpen] = useState(false);
   const contextWindowTokens = contextWindowForModel(model);
-  const slices = useMemo(() => buildContextSlices(analysis), [analysis]);
+  const slices = useMemo(
+    () => buildContextSlices(analysis, profile, skills, tools),
+    [analysis, profile, skills, tools]
+  );
   const sectionTokens = slices.reduce((sum, section) => sum + section.tokens, 0);
+  const classifiedTokens = slices.reduce(
+    (sum, section) => (section.key === "provider_unclassified" ? sum : sum + section.tokens),
+    0
+  );
   const providerInputTokens = safeNumber(analysis?.current_turn_usage.input_tokens);
   const loadedTokens = Math.max(providerInputTokens, sectionTokens);
-  const loadRatio = contextWindowTokens > 0 ? clamp(loadedTokens / contextWindowTokens, 0, 1) : 0;
-  const loadPercent = Math.round(loadRatio * 100);
-  const ringDegrees = Math.round(loadRatio * 360);
-  const status = loadPercent >= 75 ? "compressSoon" : loadPercent >= 60 ? "watch" : "ok";
+  const loadRatio =
+    contextWindowTokens !== null && contextWindowTokens > 0
+      ? clamp(loadedTokens / contextWindowTokens, 0, 1)
+      : null;
+  const loadPercent = loadRatio === null ? null : Math.round(loadRatio * 100);
+  const loadPercentLabel =
+    loadRatio === null ? "?" : loadRatio > 0 && loadPercent === 0 ? "<1%" : `${loadPercent}%`;
+  const ringDegrees = loadRatio === null ? 0 : Math.round(loadRatio * 360);
+  const status =
+    loadPercent !== null && loadPercent >= 75
+      ? "compressSoon"
+      : loadPercent !== null && loadPercent >= 60
+        ? "watch"
+        : "ok";
   const statusLabel =
     status === "compressSoon" ? "壓縮門檻" : status === "watch" ? "偏高" : "正常";
   const classifiedLabel =
-    sectionTokens > 0 ? `${formatTokens(sectionTokens)} classified` : "尚無分類";
+    classifiedTokens > 0 ? `${formatTokens(classifiedTokens)} classified sections` : "尚無分類";
 
   return (
     <div className={`contextLoadIndicator ${open ? "isOpen" : ""}`}>
@@ -52,7 +81,7 @@ export function ContextLoadIndicator({ analysis, model }: ContextLoadIndicatorPr
         type="button"
         className={`contextRingButton ${status}`}
         aria-expanded={open}
-        aria-label={`上文負載 ${loadPercent}%，${statusLabel}`}
+        aria-label={`上文負載 ${loadRatio === null ? "未知" : loadPercentLabel}，${statusLabel}`}
         onClick={() => setOpen((current) => !current)}
         onBlur={(event) => {
           if (!event.currentTarget.parentElement?.contains(event.relatedTarget as Node | null)) {
@@ -62,16 +91,16 @@ export function ContextLoadIndicator({ analysis, model }: ContextLoadIndicatorPr
         style={{ "--context-ring-deg": `${ringDegrees}deg` } as CSSProperties}
       >
         <span className="contextRing" aria-hidden="true" />
-        <span className="contextRingText">{loadPercent}%</span>
+        <span className="contextRingText">{loadPercentLabel}</span>
       </button>
       <div className="contextPopover" role="dialog" aria-label="上文明細">
         <div className="contextPopoverHeader">
           <strong>上文負載</strong>
           <span>
-            {formatTokens(loadedTokens)} / {formatTokens(contextWindowTokens)}
+            {formatTokens(loadedTokens)} / {formatContextWindow(contextWindowTokens)}
           </span>
         </div>
-        <ContextWaffle slices={slices} />
+        <ContextWaffle slices={slices} contextWindowTokens={contextWindowTokens} />
         <div className="contextLegend" aria-label="上文分類">
           {slices.map((section) => (
             <div className="contextLegendRow" key={section.key}>
@@ -92,8 +121,14 @@ export function ContextLoadIndicator({ analysis, model }: ContextLoadIndicatorPr
   );
 }
 
-function ContextWaffle({ slices }: { slices: ContextSlice[] }) {
-  const cells = waffleCells(slices);
+function ContextWaffle({
+  slices,
+  contextWindowTokens
+}: {
+  slices: ContextSlice[];
+  contextWindowTokens: number | null;
+}) {
+  const cells = waffleCells(slices, contextWindowTokens);
   return (
     <div className="contextWaffle" aria-hidden="true">
       {cells.map((color, index) => (
@@ -103,7 +138,12 @@ function ContextWaffle({ slices }: { slices: ContextSlice[] }) {
   );
 }
 
-function buildContextSlices(analysis?: ProfileAnalysis): ContextSlice[] {
+function buildContextSlices(
+  analysis: ProfileAnalysis | undefined,
+  profile: ProfileInstance,
+  skills: SkillSummary[],
+  tools: ToolSummary[]
+): ContextSlice[] {
   const sections = analysis?.context_sections ?? [];
   const slices = sections.map((section) => contextSlice(section));
   const sectionTokens = slices.reduce((sum, section) => sum + section.tokens, 0);
@@ -111,23 +151,83 @@ function buildContextSlices(analysis?: ProfileAnalysis): ContextSlice[] {
   if (providerInputTokens > sectionTokens) {
     slices.push({
       key: "provider_unclassified",
-      label: "Provider input overhead",
+      label: "Provider input reconciliation",
       status: "reported",
       tokens: providerInputTokens - sectionTokens,
-      notes: "Provider-reported input tokens not classified by saved context sections.",
+      notes:
+        "Provider-reported input tokens above saved context estimates; this may include provider-side serialization, cached prompt framing, or tokenizer differences.",
       color: sectionColorByKey.provider_unclassified
     });
   }
-  return slices.length ? slices : [
-    {
-      key: "empty",
-      label: "Analysis pending",
-      status: "missing",
-      tokens: 0,
-      notes: "Run analysis has not been generated yet.",
-      color: "#cbd5e1"
-    }
+  return slices.length ? slices : pendingContextSlices(profile, skills, tools);
+}
+
+function pendingContextSlices(
+  profile: ProfileInstance,
+  skills: SkillSummary[],
+  tools: ToolSummary[]
+): ContextSlice[] {
+  const enabledModules = Object.entries(profile.harness_modules)
+    .filter(([, enabled]) => enabled)
+    .map(([name]) => name);
+  const enabledTools = tools.filter((tool) => tool.enabled);
+  const enabledSkills = skills.filter((skill) => skill.enabled);
+  const slices = [
+    pendingSlice(
+      "agent_instructions",
+      "Agent instructions",
+      "estimated",
+      [
+        "HarnessDiff Agent mode runtime instructions",
+        profile.label,
+        enabledModules.join(" ")
+      ].join("\n"),
+      "Estimated from the selected Agent profile before backend analysis is available."
+    ),
+    pendingSlice(
+      "harness_control_plane",
+      "Harness modules",
+      enabledModules.length ? "configured" : "not_configured",
+      enabledModules.join("\n"),
+      "Enabled Harness module ids that affect instructions and control-plane context."
+    ),
+    pendingSlice(
+      "tool_definitions",
+      "Tool definitions",
+      profile.harness_modules.tool_policy ? "configured" : "not_configured",
+      enabledTools.length
+        ? enabledTools.map((tool) => `${tool.name}: ${tool.description}`).join("\n")
+        : profile.harness_modules.tool_policy
+          ? "Runtime tool schemas are enabled and assembled by the backend."
+          : "",
+      "Estimated from enabled tool metadata; provider schema overhead is finalized by the backend."
+    ),
+    pendingSlice(
+      "activated_skills",
+      "Skill metadata",
+      enabledSkills.length ? "configured" : "not_configured",
+      enabledSkills.map((skill) => `${skill.name}: ${skill.description}`).join("\n"),
+      "First-layer skill metadata available before task-specific skill activation."
+    )
   ];
+  return slices.filter((slice) => slice.tokens > 0);
+}
+
+function pendingSlice(
+  key: string,
+  label: string,
+  status: string,
+  text: string,
+  notes: string
+): ContextSlice {
+  return {
+    key,
+    label,
+    status,
+    tokens: estimateTextTokens(text),
+    notes,
+    color: sectionColorByKey[key] ?? "#64748b"
+  };
 }
 
 function contextSlice(section: ContextSection): ContextSlice {
@@ -141,12 +241,12 @@ function contextSlice(section: ContextSection): ContextSlice {
   };
 }
 
-function waffleCells(slices: ContextSlice[]) {
+function waffleCells(slices: ContextSlice[], contextWindowTokens: number | null) {
   const positiveSlices = slices.filter((section) => section.tokens > 0);
-  if (!positiveSlices.length) {
+  if (!positiveSlices.length || contextWindowTokens === null || contextWindowTokens <= 0) {
     return Array.from({ length: waffleCellCount }, () => "#e2e8f0");
   }
-  const total = positiveSlices.reduce((sum, section) => sum + section.tokens, 0);
+  const total = Math.max(contextWindowTokens, positiveSlices.reduce((sum, section) => sum + section.tokens, 0));
   const rawCounts = positiveSlices.map((section) => ({
     section,
     count: Math.floor((section.tokens / total) * waffleCellCount),
@@ -156,20 +256,29 @@ function waffleCells(slices: ContextSlice[]) {
   [...rawCounts]
     .sort((left, right) => right.remainder - left.remainder)
     .forEach((item) => {
-      if (assigned < waffleCellCount) {
+      if (assigned < waffleCellCount && item.remainder > 0) {
         item.count += 1;
         assigned += 1;
       }
     });
-  return rawCounts.flatMap((item) => Array.from({ length: item.count }, () => item.section.color));
+  const usedCells = rawCounts.flatMap((item) => Array.from({ length: item.count }, () => item.section.color));
+  return [
+    ...usedCells,
+    ...Array.from({ length: Math.max(0, waffleCellCount - usedCells.length) }, () => "#e2e8f0")
+  ].slice(0, waffleCellCount);
 }
 
-function contextWindowForModel(_model: string) {
-  return defaultContextWindowTokens;
+function contextWindowForModel(model: string) {
+  return contextWindowByModel[model] ?? null;
 }
 
 function safeNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+function estimateTextTokens(text: string) {
+  const characters = text.trim().length;
+  return characters ? Math.max(1, Math.ceil(characters / 4)) : 0;
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -184,4 +293,8 @@ function formatTokens(value: number) {
     return `${Math.round(value / 1_000)}k tok`;
   }
   return `${value} tok`;
+}
+
+function formatContextWindow(value: number | null) {
+  return value === null ? "window unknown" : formatTokens(value);
 }

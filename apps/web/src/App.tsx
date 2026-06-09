@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AnalysisSummary } from "./components/AnalysisSummary";
-import { AgentComposer } from "./components/AgentComposer";
 import { AgentWorkspace } from "./components/AgentWorkspace";
 import { ChatPane } from "./components/ChatPane";
 import { Composer } from "./components/Composer";
@@ -859,7 +858,25 @@ export function App() {
     }
   }
 
-  async function submitAgentTask() {
+  function agentSurfacePayload(objective: string) {
+    return {
+      type: "agent",
+      objective: objective || "Inspect attached files",
+      context: "",
+      max_steps: 16,
+      allow_subagents: true,
+      allow_container_tools: true
+    };
+  }
+
+  function clearAgentStepsForProfiles(profileIds: ProfileId[]) {
+    const targets = new Set(profileIds);
+    setAgentSteps((current) =>
+      Object.fromEntries(Object.entries(current).filter(([profileId]) => !targets.has(profileId)))
+    );
+  }
+
+  async function submitAgentIntegrated() {
     const draft = integratedDraft.trim();
     if (
       (!draft && integratedAttachments.length === 0) ||
@@ -874,22 +891,52 @@ export function App() {
       const messageAttachments = messageAttachmentPreviews(integratedAttachments);
       setIntegratedDraft("");
       clearAttachments("integrated");
-      setAgentSteps({});
+      const targetProfileIds = profiles.map((profile) => profile.id);
+      clearAgentStepsForProfiles(targetProfileIds);
       void submitWithApi(
         prompt,
         draft,
-        profiles.map((profile) => profile.id),
+        targetProfileIds,
         "integrated",
         runAttachments,
         messageAttachments,
-        {
-          type: "agent",
-          objective: draft || "Inspect attached files",
-          context: "",
-          max_steps: 16,
-          allow_subagents: true,
-          allow_container_tools: true
-        }
+        agentSurfacePayload(draft)
+      );
+    } catch (error) {
+      setSkillError(errorMessage(error));
+      setSkillsOpen(true);
+    }
+  }
+
+  async function submitAgentProfile(profileId: ProfileId) {
+    const profile = profiles.find((candidate) => candidate.id === profileId);
+    const draft = profileState[profileId]?.draft.trim() ?? "";
+    const attachments = profileAttachments[profileId] ?? [];
+    if (!profile) {
+      return;
+    }
+    if (
+      (!draft && attachments.length === 0) ||
+      Boolean(profileState[profileId]?.streaming) ||
+      submittingProfilesRef.current.has(profileId)
+    ) {
+      return;
+    }
+    try {
+      const prompt = await buildPromptWithContext(draft, attachments);
+      const runAttachments = attachmentRunInputs(attachments);
+      const messageAttachments = messageAttachmentPreviews(attachments);
+      updateProfileState(profileId, (current) => ({ ...current, draft: "" }));
+      clearAttachments(profileId);
+      clearAgentStepsForProfiles([profileId]);
+      void submitWithApi(
+        prompt,
+        draft,
+        [profileId],
+        "independent",
+        runAttachments,
+        messageAttachments,
+        agentSurfacePayload(draft)
       );
     } catch (error) {
       setSkillError(errorMessage(error));
@@ -1134,6 +1181,8 @@ export function App() {
           profileState={profileState}
           steps={agentSteps}
           analysis={analysis}
+          skills={enabledSkills}
+          tools={tools}
           model={model}
         />
       ) : (
@@ -1155,16 +1204,30 @@ export function App() {
         analysis={analysis}
       />
       {surfaceType === "agent" ? (
-        <AgentComposer
-          draft={integratedDraft}
+        <Composer
+          inputMode={inputMode}
+          integratedDraft={integratedDraft}
+          profiles={profiles}
+          profileDrafts={Object.fromEntries(
+            profiles.map((profile) => [profile.id, profileState[profile.id]?.draft ?? ""])
+          )}
+          skills={enabledSkills}
           attachments={integratedAttachments}
+          profileAttachments={profileAttachments}
           disabled={running}
+          profileDisabled={profileDisabled}
           running={running}
-          onDraftChange={setIntegratedDraft}
-          onAttach={(files) => handleAttach("integrated", files)}
-          onRemoveAttachment={(id) => removeAttachment("integrated", id)}
-          onSubmit={submitAgentTask}
-          onCancel={pauseExecution}
+          onModeChange={setInputMode}
+          onIntegratedDraftChange={setIntegratedDraft}
+          onProfileDraftChange={(profileId, value) =>
+            updateProfileState(profileId, (current) => ({ ...current, draft: value }))
+          }
+          onAttach={handleAttach}
+          onRemoveAttachment={removeAttachment}
+          onTranscribeAudio={handleTranscribeAudio}
+          onSubmitIntegrated={submitAgentIntegrated}
+          onSubmitProfile={submitAgentProfile}
+          onPause={pauseExecution}
         />
       ) : (
         <Composer

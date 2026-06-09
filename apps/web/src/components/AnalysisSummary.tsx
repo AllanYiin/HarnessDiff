@@ -9,6 +9,7 @@ type AnalysisSummaryProps = {
 
 export function AnalysisSummary({ turnCount, inputMode, running, analysis }: AnalysisSummaryProps) {
   const profiles = analysis ? Object.values(analysis.profiles) : [];
+  const hasPendingUsage = profiles.some((profile) => isUsagePending(profile));
   const headline = running
     ? "正在比較左右輸出"
     : analysis
@@ -17,7 +18,9 @@ export function AnalysisSummary({ turnCount, inputMode, running, analysis }: Ana
         ? "準備開始第一回合"
         : "等待分析資料";
   const summary = analysis
-    ? `Delta ${formatSigned(analysis.comparison.total_token_delta)} tokens；目前是 ${inputMode === "integrated" ? "整合輸入" : "個別輸入"}。`
+    ? hasPendingUsage
+      ? `Delta 待結算；目前是 ${inputMode === "integrated" ? "整合輸入" : "個別輸入"}。`
+      : `Delta ${formatSigned(analysis.comparison.total_token_delta)} tokens；目前是 ${inputMode === "integrated" ? "整合輸入" : "個別輸入"}。`
     : turnCount === 0
       ? "第一回合預設一鍵雙送；完成後會切換為個別輸入。"
       : "尚未收到後端分析資料；請檢查本回合 stream 是否送出 analysis_ready。";
@@ -52,6 +55,18 @@ function Metric({ profile }: { profile: ProfileAnalysis }) {
   const reasoningTokens = asNumber(usage.reasoning_tokens);
   const totalTokens = asNumber(usage.total_tokens);
   const cumulativeTotalTokens = asNumber(cumulative.total_tokens);
+  const estimatedInputTokens = estimatedContextTokens(profile);
+  if (isUsagePending(profile)) {
+    const estimateLabel =
+      estimatedInputTokens > 0 ? `估 input ≥ ${formatCompactTokens(estimatedInputTokens)}` : "input tokens 待結算";
+    return (
+      <span
+        title={`${profile.profile_label}: provider usage has not been reported yet; context-section estimate ${estimatedInputTokens}`}
+      >
+        {profile.profile_label} {estimateLabel} · provider usage 待結算 · Σ --
+      </span>
+    );
+  }
   return (
     <span
       title={`Current turn: input ${inputTokens}, cached input ${cachedTokens}, output ${outputTokens}, reasoning ${reasoningTokens}, total ${totalTokens}; cumulative total ${cumulativeTotalTokens}`}
@@ -133,6 +148,39 @@ function countItems(value: unknown) {
 
 function asNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function isUsagePending(profile: ProfileAnalysis) {
+  const usage = profile.current_turn_usage;
+  if (usage.source !== "missing") {
+    return false;
+  }
+  return (
+    asNumber(usage.input_tokens) === 0 &&
+    asNumber(usage.cached_tokens) === 0 &&
+    asNumber(usage.output_tokens) === 0 &&
+    asNumber(usage.reasoning_tokens) === 0 &&
+    asNumber(usage.total_tokens) === 0
+  );
+}
+
+function estimatedContextTokens(profile: ProfileAnalysis) {
+  return profile.context_sections.reduce((sum, section) => {
+    if (!["sent", "recorded"].includes(section.status)) {
+      return sum;
+    }
+    return sum + asNumber(section.estimated_tokens);
+  }, 0);
+}
+
+function formatCompactTokens(value: number) {
+  if (value >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M tok`;
+  }
+  if (value >= 1_000) {
+    return `${Math.round(value / 1_000)}k tok`;
+  }
+  return `${value} tok`;
 }
 
 function formatSigned(value: number) {

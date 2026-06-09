@@ -48,6 +48,11 @@ type SkillTokenRange = {
   id: string;
 };
 
+type EditorPointResult = {
+  point: { node: Node; offset: number };
+  offset: number;
+};
+
 export function Composer({
   inputMode,
   integratedDraft,
@@ -834,39 +839,68 @@ function setEditorSelection(root: HTMLElement, start: number, end: number) {
 }
 
 function editorPointAtOffset(root: HTMLElement, targetOffset: number) {
-  let current = 0;
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
-  let node = walker.nextNode();
-  while (node) {
-    if (node.nodeType === Node.TEXT_NODE) {
-      const text = node.textContent ?? "";
-      const next = current + text.length;
-      if (targetOffset <= next) {
-        return { node, offset: Math.max(0, targetOffset - current) };
-      }
-      current = next;
-    } else if (node instanceof HTMLBRElement) {
-      const next = current + 1;
-      if (targetOffset <= next) {
-        return { node: root, offset: childIndex(root, node) + 1 };
-      }
-      current = next;
-    } else if (node instanceof HTMLElement && node.classList.contains("skillCommandToken")) {
-      const token = node.dataset.token ?? node.textContent ?? "";
-      const next = current + token.length;
-      if (targetOffset <= next) {
-        const offset = targetOffset - current < token.length / 2 ? childIndex(root, node) : childIndex(root, node) + 1;
-        return { node: root, offset };
-      }
-      current = next;
-    }
-    node = walker.nextNode();
-  }
-  return { node: root, offset: root.childNodes.length };
+  return editorPointInside(root, targetOffset, 0).point;
 }
 
-function childIndex(parent: HTMLElement, child: Node) {
-  return Array.prototype.indexOf.call(parent.childNodes, child);
+function editorPointInside(
+  parent: HTMLElement,
+  targetOffset: number,
+  initialOffset: number
+): EditorPointResult {
+  let current = initialOffset;
+  const children = Array.from(parent.childNodes);
+  for (const [index, child] of children.entries()) {
+    if (child.nodeType === Node.TEXT_NODE) {
+      const text = child.textContent ?? "";
+      const next = current + text.length;
+      if (targetOffset <= next) {
+        return {
+          point: { node: child, offset: Math.max(0, targetOffset - current) },
+          offset: next
+        };
+      }
+      current = next;
+      continue;
+    }
+    if (child instanceof HTMLBRElement) {
+      const next = current + 1;
+      if (targetOffset <= next) {
+        return { point: { node: parent, offset: index + 1 }, offset: next };
+      }
+      current = next;
+      continue;
+    }
+    if (child instanceof HTMLElement && child.classList.contains("skillCommandToken")) {
+      const token = child.dataset.token ?? child.textContent ?? "";
+      const next = current + token.length;
+      if (targetOffset <= next) {
+        return {
+          point: {
+            node: parent,
+            offset: targetOffset - current < token.length / 2 ? index : index + 1
+          },
+          offset: next
+        };
+      }
+      current = next;
+      continue;
+    }
+    if (child instanceof HTMLElement) {
+      const nested = editorPointInside(child, targetOffset, current);
+      if (nested.offset >= targetOffset) {
+        return nested;
+      }
+      current = nested.offset;
+      if (child instanceof HTMLDivElement || child instanceof HTMLParagraphElement) {
+        const next = current + 1;
+        if (targetOffset <= next) {
+          return { point: { node: parent, offset: index + 1 }, offset: next };
+        }
+        current = next;
+      }
+    }
+  }
+  return { point: { node: parent, offset: parent.childNodes.length }, offset: current };
 }
 
 function deleteAdjacentSkillToken(event: KeyboardEvent<HTMLElement>, value: string, skills: SkillSummary[]) {
