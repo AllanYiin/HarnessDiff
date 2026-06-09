@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -42,9 +44,16 @@ async def transcribe_audio(request: Request) -> AudioTranscriptionResponse:
         request.headers.get("x-audio-filename"),
         fallback=_filename_for_mime_type(mime_type),
     )
+    accept_language = request.headers.get("accept-language")
     transcriber = request.app.state.audio_transcriber
     try:
-        text = await transcriber.transcribe_audio(audio, filename, mime_type)
+        text = await _transcribe_audio(
+            transcriber,
+            audio,
+            filename,
+            mime_type,
+            accept_language=accept_language,
+        )
     except ProviderConfigurationError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from None
     except Exception as exc:
@@ -65,3 +74,32 @@ def _filename_for_mime_type(mime_type: str) -> str:
     if mime_type in {"audio/mp4", "video/mp4"}:
         return "voice-input.mp4"
     return "voice-input.webm"
+
+
+async def _transcribe_audio(
+    transcriber: Any,
+    audio: bytes,
+    filename: str,
+    mime_type: str,
+    *,
+    accept_language: str | None,
+) -> str:
+    if _accepts_accept_language(transcriber):
+        return await transcriber.transcribe_audio(
+            audio,
+            filename,
+            mime_type,
+            accept_language=accept_language,
+        )
+    return await transcriber.transcribe_audio(audio, filename, mime_type)
+
+
+def _accepts_accept_language(transcriber: Any) -> bool:
+    try:
+        signature = inspect.signature(transcriber.transcribe_audio)
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return any(
+        name == "accept_language" or parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for name, parameter in signature.parameters.items()
+    )
