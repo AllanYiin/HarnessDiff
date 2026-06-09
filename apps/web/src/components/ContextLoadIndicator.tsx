@@ -31,6 +31,7 @@ type ContextLoadIndicatorProps = {
   skills: SkillSummary[];
   tools: ToolSummary[];
   model: string;
+  pendingContextSections?: ContextSection[];
 };
 
 type ContextSlice = {
@@ -42,12 +43,19 @@ type ContextSlice = {
   color: string;
 };
 
-export function ContextLoadIndicator({ analysis, profile, skills, tools, model }: ContextLoadIndicatorProps) {
+export function ContextLoadIndicator({
+  analysis,
+  profile,
+  skills,
+  tools,
+  model,
+  pendingContextSections = []
+}: ContextLoadIndicatorProps) {
   const [open, setOpen] = useState(false);
   const contextWindowTokens = contextWindowForModel(model);
   const slices = useMemo(
-    () => buildContextSlices(analysis, profile, skills, tools),
-    [analysis, profile, skills, tools]
+    () => buildContextSlices(analysis, profile, skills, tools, pendingContextSections),
+    [analysis, profile, skills, tools, pendingContextSections]
   );
   const sectionTokens = slices.reduce((sum, section) => sum + section.tokens, 0);
   const classifiedTokens = slices.reduce(
@@ -142,7 +150,8 @@ function buildContextSlices(
   analysis: ProfileAnalysis | undefined,
   profile: ProfileInstance,
   skills: SkillSummary[],
-  tools: ToolSummary[]
+  tools: ToolSummary[],
+  pendingContextSections: ContextSection[]
 ): ContextSlice[] {
   const sections = analysis?.context_sections ?? [];
   const slices = sections.map((section) => contextSlice(section));
@@ -159,13 +168,14 @@ function buildContextSlices(
       color: sectionColorByKey.provider_unclassified
     });
   }
-  return slices.length ? slices : pendingContextSlices(profile, skills, tools);
+  return slices.length ? slices : pendingContextSlices(profile, skills, tools, pendingContextSections);
 }
 
 function pendingContextSlices(
   profile: ProfileInstance,
   skills: SkillSummary[],
-  tools: ToolSummary[]
+  tools: ToolSummary[],
+  pendingContextSections: ContextSection[]
 ): ContextSlice[] {
   const enabledModules = Object.entries(profile.harness_modules)
     .filter(([, enabled]) => enabled)
@@ -210,7 +220,8 @@ function pendingContextSlices(
       "First-layer skill metadata available before task-specific skill activation."
     )
   ];
-  return slices.filter((slice) => slice.tokens > 0);
+  const pendingSlices = pendingContextSections.map((section) => contextSlice(section));
+  return [...slices, ...pendingSlices].filter((slice) => slice.tokens > 0);
 }
 
 function pendingSlice(

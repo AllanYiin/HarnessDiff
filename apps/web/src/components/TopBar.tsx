@@ -14,7 +14,8 @@ const harnessModuleOptions: { id: HarnessModuleId; label: string }[] = [
   { id: "memory_selection", label: "Memory Selection" },
   { id: "post_answer_critique", label: "Post-answer Critique" },
   { id: "token_budgeter", label: "Token Budgeter" },
-  { id: "consequence_gate", label: "Consequence Gate" }
+  { id: "consequence_gate", label: "Consequence Gate" },
+  { id: "artifact_review", label: "Artifact Review" }
 ];
 
 type TopBarProps = {

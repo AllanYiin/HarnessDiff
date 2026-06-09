@@ -1,11 +1,11 @@
 import { Check, Copy } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { MarkdownContent } from "./MarkdownContent";
 import { AgentTraceTimeline } from "./AgentTraceTimeline";
 import { ToolCallDisclosure } from "./ToolCallDisclosure";
 import { ContextLoadIndicator } from "./ContextLoadIndicator";
-import type { ProfileAnalysis, SkillSummary, ToolSummary } from "../api";
+import type { ContextSection, ProfileAnalysis, SkillSummary, ToolSummary } from "../api";
 import type { AgentStepTrace, Message, ProfileInstance } from "../types";
 
 type AgentPaneProps = {
@@ -31,6 +31,10 @@ export function AgentPane({
 }: AgentPaneProps) {
   const hasControls = Object.values(profile.harness_modules).some(Boolean);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const pendingContextSections = useMemo(
+    () => buildPendingAgentContextSections(messages, steps),
+    [messages, steps]
+  );
 
   async function copyMessage(message: Message) {
     if (!message.text) return;
@@ -49,15 +53,14 @@ export function AgentPane({
           <p>{hasControls ? "Harness 控制與工具軌跡" : "直接 Agent 對照組"}</p>
         </div>
         <div className="profileHeaderActions">
-          {hasControls ? (
-            <ContextLoadIndicator
-              analysis={analysis}
-              profile={profile}
-              skills={skills}
-              tools={tools}
-              model={model}
-            />
-          ) : null}
+          <ContextLoadIndicator
+            analysis={analysis}
+            profile={profile}
+            skills={skills}
+            tools={tools}
+            model={model}
+            pendingContextSections={pendingContextSections}
+          />
           <span className={`profileStatus ${streaming ? "active" : ""}`}>
             {streaming ? "執行中" : "待命"}
           </span>
@@ -138,6 +141,78 @@ export function AgentPane({
       </div>
     </section>
   );
+}
+
+function buildPendingAgentContextSections(
+  messages: Message[],
+  steps: AgentStepTrace[]
+): ContextSection[] {
+  const currentTaskIndex = latestUserMessageIndex(messages);
+  const currentTask = currentTaskIndex >= 0 ? messages[currentTaskIndex]?.text ?? "" : "";
+  const historyText =
+    currentTaskIndex > 0
+      ? messages
+          .slice(0, currentTaskIndex)
+          .map((message) => `${message.role}: ${message.text}`)
+          .join("\n")
+      : "";
+  const stepText = steps
+    .map((step) => {
+      const toolName = step.tool_name ? ` · ${step.tool_name}` : "";
+      return `${step.sequence}: ${step.label}${toolName} [${step.status}]`;
+    })
+    .join("\n");
+
+  return [
+    pendingContextSection(
+      "stored_conversation_history",
+      "Stored conversation history",
+      historyText,
+      "local",
+      "Visible profile-local transcript while backend analysis is pending."
+    ),
+    pendingContextSection(
+      "current_agent_task",
+      "Current agent task",
+      currentTask,
+      "local",
+      "Latest submitted agent task visible in this pane while backend analysis is pending."
+    ),
+    pendingContextSection(
+      "agent_steps",
+      "Agent step trace",
+      stepText,
+      "recorded",
+      "Agent steps received from the run stream while backend analysis is pending."
+    )
+  ].filter((section) => section.estimated_tokens > 0);
+}
+
+function latestUserMessageIndex(messages: Message[]) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "user" && messages[index]?.text.trim()) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function pendingContextSection(
+  key: string,
+  label: string,
+  text: string,
+  status: string,
+  notes: string
+): ContextSection {
+  const characters = text.trim().length;
+  return {
+    key,
+    label,
+    status,
+    characters,
+    estimated_tokens: characters ? Math.max(1, Math.ceil(characters / 4)) : 0,
+    notes
+  };
 }
 
 function formatBytes(size: number) {

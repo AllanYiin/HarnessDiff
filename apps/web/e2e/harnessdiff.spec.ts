@@ -56,6 +56,123 @@ test("renders HarnessDiff workbench and captures screenshot", async ({ page }, t
   });
 });
 
+test("keeps artifact canvases profile-local and previews HTML in sandbox", async ({ page }) => {
+  let createdArtifactCount = 0;
+  let submittedRun: Record<string, any> | null = null;
+  await page.route("**/api/skills", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ skills: [] })
+    });
+  });
+  await page.route("**/api/subagents", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ subagents: [] })
+    });
+  });
+  await page.route("**/api/tools", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ tools: [] })
+    });
+  });
+  await page.route("**/api/projects", async (route) => {
+    if (route.request().method() === "POST") {
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({ id: "proj_canvas", name: "Canvas", surface_type: "chat" })
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ projects: [] })
+    });
+  });
+  await page.route("**/api/projects/proj_canvas/artifacts", async (route) => {
+    const payload = route.request().postDataJSON();
+    createdArtifactCount += 1;
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({
+        schema_version: "test",
+        id: `art_${payload.profile_id}`,
+        project_id: "proj_canvas",
+        profile_id: payload.profile_id,
+        kind: payload.kind,
+        title: payload.title,
+        content: payload.content,
+        version: 1,
+        created_at: "2026-06-09T00:00:00Z",
+        updated_at: "2026-06-09T00:00:00Z"
+      })
+    });
+  });
+  await page.route("**/api/projects/proj_canvas/runs", async (route) => {
+    submittedRun = route.request().postDataJSON();
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({ id: "run_canvas" })
+    });
+  });
+  await page.route("**/api/runs/run_canvas/stream", async (route) => {
+    const lines = [
+      { run_id: "run_canvas", profile_id: "baseline", profile_label: "NoHarness", type: "created", sequence: 0 },
+      { run_id: "run_canvas", profile_id: "baseline", profile_label: "NoHarness", type: "delta", text: "baseline done", sequence: 1 },
+      { run_id: "run_canvas", profile_id: "baseline", profile_label: "NoHarness", type: "completed", sequence: 2 },
+      { run_id: "run_canvas", profile_id: "harness", profile_label: "Harness", type: "created", sequence: 0 },
+      { run_id: "run_canvas", profile_id: "harness", profile_label: "Harness", type: "delta", text: "harness done", sequence: 1 },
+      { run_id: "run_canvas", profile_id: "harness", profile_label: "Harness", type: "completed", sequence: 2 },
+      { run_id: "run_canvas", type: "run_completed" }
+    ];
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: lines.map((line) => `data: ${JSON.stringify(line)}\n\n`).join("")
+    });
+  });
+
+  await page.goto("/");
+  const noHarnessColumn = page.locator(".profileWorkColumn", {
+    has: page.getByRole("heading", { name: "NoHarness", exact: true })
+  });
+  const harnessColumn = page.locator(".profileWorkColumn", {
+    has: page.getByRole("heading", { name: "Harness", exact: true })
+  });
+  await expect(noHarnessColumn.locator(".artifactWorkbench")).toHaveCount(0);
+  await noHarnessColumn.getByRole("button", { name: "Show NoHarness canvas" }).click();
+  await noHarnessColumn.locator(".artifactEditor .cm-content").fill("<!doctype html><html><body>NoHarness</body></html>");
+  await noHarnessColumn.getByRole("button", { name: "Preview canvas" }).click();
+  const iframe = noHarnessColumn.locator(".artifactHtmlPreview");
+  await expect(iframe).toHaveAttribute("sandbox", "");
+  await noHarnessColumn.getByLabel("Enable scripts").check();
+  await expect(iframe).toHaveAttribute("sandbox", "allow-scripts");
+  await expect(iframe).not.toHaveAttribute("sandbox", /allow-same-origin/);
+
+  await harnessColumn.getByRole("button", { name: "Show Harness canvas" }).click();
+  await harnessColumn.getByRole("button", { name: "Edit canvas" }).click();
+  await expect(harnessColumn.locator(".artifactEditor .cm-content")).not.toContainText("NoHarness");
+  await harnessColumn.locator(".artifactEditor .cm-content").fill("<!doctype html><html><body>Harness</body></html>");
+  await page.locator(".promptEditor").first().fill("revise both canvases");
+  await page.getByRole("button", { name: "送出" }).click();
+
+  await expect(page.getByText("baseline done")).toBeVisible();
+  await expect(page.getByText("harness done")).toBeVisible();
+  expect(createdArtifactCount).toBe(2);
+  expect(submittedRun?.artifact_refs.map((ref: Record<string, unknown>) => ref.profile_id).sort()).toEqual([
+    "baseline",
+    "harness"
+  ]);
+});
+
 test("renders analysis metrics from streamed API events", async ({ page }) => {
   await page.route("**/api/projects", async (route) => {
     await route.fulfill({
@@ -304,6 +421,57 @@ test("lists skills and imports a skill file", async ({ page }) => {
   expect(importPayload?.data_base64).toBeTruthy();
 });
 
+test("keeps management fetch errors scoped to their active tab", async ({ page }) => {
+  const skill = {
+    id: "demo-skill",
+    name: "demo-skill",
+    description: "Demo skill description",
+    version: "",
+    enabled: true,
+    can_toggle: true,
+    can_delete: false,
+    path: "C:\\Users\\demo\\.harnessdiff\\skills\\demo-skill"
+  };
+
+  await page.route("**/api/skills", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        home_dir: "C:\\Users\\demo\\.harnessdiff",
+        skills_dir: "C:\\Users\\demo\\.harnessdiff\\skills",
+        skills: [skill]
+      })
+    });
+  });
+  await page.route("**/api/subagents", async (route) => {
+    await route.abort("failed");
+  });
+  await page.route("**/api/tools", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ tools: [] })
+    });
+  });
+  await page.route("**/api/projects", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ projects: [] })
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "技能" }).click();
+  await expect(page.getByLabel("技能管理")).toBeVisible();
+  await expect(page.locator(".skillSelectButton").filter({ hasText: "demo-skill" })).toBeVisible();
+  await expect(page.getByText("Failed to fetch")).toHaveCount(0);
+
+  await page.getByRole("tab", { name: /Subagents/ }).click();
+  await expect(page.getByText("Failed to fetch")).toBeVisible();
+});
+
 test("uses skill slash commands in the composer", async ({ page }) => {
   let submittedPrompt = "";
   const skill = {
@@ -470,6 +638,22 @@ test("uses chat composer features on the agent surface", async ({ page }) => {
   await page.route("**/api/runs/run_agent_integrated/stream", async (route) => {
     const lines = [
       { run_id: "run_agent_integrated", profile_id: "baseline_agent", profile_label: "NoHarness Agent", type: "completed", sequence: 1 },
+      {
+        run_id: "run_agent_integrated",
+        profile_id: "harness_agent",
+        profile_label: "Harness Agent",
+        type: "agent_step_completed",
+        sequence: 1,
+        agent_step: {
+          profile_id: "harness_agent",
+          profile_label: "Harness Agent",
+          step_id: "step_0000",
+          sequence: 1,
+          type: "agent_step_completed",
+          label: "Prepare agent task",
+          status: "completed"
+        }
+      },
       { run_id: "run_agent_integrated", profile_id: "harness_agent", profile_label: "Harness Agent", type: "completed", sequence: 1 },
       { run_id: "run_agent_integrated", type: "run_completed" }
     ];
@@ -524,6 +708,18 @@ test("uses chat composer features on the agent surface", async ({ page }) => {
   expect(submittedRuns[0].surface_payload?.type).toBe("agent");
   expect(submittedRuns[0].surface_payload?.objective).toBe("/demo-skill agent integrated task");
   expect(submittedRuns[0].prompt).toContain("Requested skill 1: demo-skill");
+  const noHarnessAgentPane = page.locator(".agentPane", {
+    has: page.getByRole("heading", { name: "NoHarness Agent", exact: true })
+  });
+  const harnessAgentPane = page.locator(".agentPane", {
+    has: page.getByRole("heading", { name: "Harness Agent", exact: true })
+  });
+  await noHarnessAgentPane.locator(".contextRingButton").click();
+  await expect(noHarnessAgentPane.getByText("Current agent task")).toBeVisible();
+  await harnessAgentPane.locator(".contextRingButton").click();
+  await expect(harnessAgentPane.getByText("Current agent task")).toBeVisible();
+  await expect(harnessAgentPane.getByText("Agent step trace")).toBeVisible();
+  await expect(harnessAgentPane.getByText("Harness modules")).toBeVisible();
 
   await page.getByRole("button", { name: "個別獨立輸入" }).click();
   const independentEditors = page.locator(".splitInputRow .promptEditor");

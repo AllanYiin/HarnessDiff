@@ -98,7 +98,12 @@ class AgentRunOrchestrator(RunOrchestrator):
                     run_dir=run_dir,
                     harness_mode=has_harness_context,
                 )
-                profile_prompt = f"{run.prompt}{pdf_context}".strip()
+                artifact_context = self.store.build_artifact_context_prompt(
+                    run.project_id,
+                    run.artifact_refs,
+                    profile_id=profile.id,
+                )
+                profile_prompt = f"{run.prompt}{pdf_context}{artifact_context}".strip()
                 if self.skill_store is not None:
                     if has_harness_context:
                         agents_context = self.skill_store.agents_context()

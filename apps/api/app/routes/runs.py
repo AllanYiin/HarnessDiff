@@ -10,7 +10,7 @@ from app.services.agent_orchestrator import AgentRunOrchestrator
 from app.services.agent_analysis_builder import build_agent_run_analysis
 from app.services.analysis_builder import build_run_analysis
 from app.services.run_orchestrator import RunOrchestrator, sse_encode
-from app.storage.errors import InvalidProjectIdError, ProjectNotFoundError
+from app.storage.errors import ArtifactVersionConflictError, InvalidProjectIdError, ProjectNotFoundError
 from app.storage.project_store import ProjectStore
 
 router = APIRouter(tags=["runs"])
@@ -28,6 +28,16 @@ def get_store(request: Request) -> ProjectStore:
 async def create_run(request: Request, project_id: str, payload: RunCreate) -> RunDocument:
     try:
         return get_store(request).create_run(project_id, payload)
+    except ArtifactVersionConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Artifact version conflict",
+                "artifact_id": exc.artifact_id,
+                "expected_version": exc.expected_version,
+                "actual_version": exc.actual_version,
+            },
+        ) from None
     except ProjectNotFoundError:
         raise HTTPException(status_code=404, detail="Project not found") from None
     except InvalidProjectIdError:

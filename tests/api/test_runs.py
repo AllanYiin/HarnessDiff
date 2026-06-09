@@ -271,7 +271,7 @@ def test_coding_prompt_requires_execution_evidence_for_harness_only(tmp_path) ->
     run = client.post(
         f"/api/projects/{project_id}/runs",
         json={
-            "prompt": "請修改 provider 程式並跑 pytest 測試",
+            "prompt": "請建立 React 原型，新增 UI 與測試",
             "input_mode": "integrated",
             "model": "fake-model",
             "reasoning_effort": "medium",

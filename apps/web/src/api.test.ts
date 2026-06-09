@@ -2,11 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   createProject,
+  createArtifact,
   createRun,
   createSubagent,
   getProjectTranscript,
+  listArtifacts,
   listProjects,
   listSubagents,
+  patchArtifact,
   transcribeAudio
 } from "./api";
 
@@ -113,6 +116,75 @@ describe("api response normalization", () => {
         detail: "auto"
       }
     ]);
+  });
+
+  it("sends artifact refs when creating a run", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse({ id: "run_mock" }, true, 201));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createRun({
+      projectId: "proj_mock",
+      prompt: "revise canvas",
+      inputMode: "independent",
+      model: "fake-model",
+      reasoningEffort: "medium",
+      profiles: [{ id: "baseline", label: "NoHarness", harness_modules: {} }],
+      artifactRefs: [
+        {
+          artifact_id: "art_1",
+          profile_id: "baseline",
+          version: 2,
+          include_mode: "full"
+        }
+      ]
+    });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.artifact_refs).toEqual([
+      {
+        artifact_id: "art_1",
+        profile_id: "baseline",
+        version: 2,
+        include_mode: "full"
+      }
+    ]);
+  });
+
+  it("uses project-local artifact endpoints", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(mockJsonResponse({ artifacts: [{ id: "art_1" }] }))
+      .mockResolvedValueOnce(mockJsonResponse({ id: "art_2" }, true, 201))
+      .mockResolvedValueOnce(mockJsonResponse({ id: "art_2", version: 2 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(listArtifacts("proj_mock", "baseline")).resolves.toEqual([{ id: "art_1" }]);
+    await expect(
+      createArtifact("proj_mock", {
+        profile_id: "baseline",
+        kind: "plain_text",
+        title: "Note",
+        content: "hello"
+      })
+    ).resolves.toMatchObject({ id: "art_2" });
+    await expect(
+      patchArtifact("proj_mock", "art_2", {
+        base_version: 1,
+        content: "updated"
+      })
+    ).resolves.toMatchObject({ version: 2 });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/projects/proj_mock/artifacts?profile_id=baseline");
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/projects/proj_mock/artifacts",
+      expect.objectContaining({ method: "POST" })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/projects/proj_mock/artifacts/art_2",
+      expect.objectContaining({ method: "PATCH" })
+    );
   });
 
   it("posts recorded audio to the transcription endpoint", async () => {

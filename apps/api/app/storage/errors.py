@@ -21,3 +21,12 @@ class StorageCorruptionError(Exception):
         self.project_id = project_id
         self.report_path = report_path
 
+
+class ArtifactVersionConflictError(Exception):
+    def __init__(self, artifact_id: str, expected_version: int, actual_version: int) -> None:
+        super().__init__(
+            f"Artifact version conflict: {artifact_id} expected {expected_version}, actual {actual_version}"
+        )
+        self.artifact_id = artifact_id
+        self.expected_version = expected_version
+        self.actual_version = actual_version

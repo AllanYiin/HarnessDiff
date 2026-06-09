@@ -18,7 +18,7 @@ type SkillPanelProps = {
   creatingSubagent: boolean;
   tools: ToolSummary[];
   toolsLoading: boolean;
-  error: string;
+  errors: Partial<Record<SkillPanelTab, string>>;
   onImportFile: (file: File | null) => void;
   onImportFolder: (files: FileList | null) => void;
   onSelectSkill: (skillId: string) => void;
@@ -53,7 +53,7 @@ export function SkillPanel({
   creatingSubagent,
   tools,
   toolsLoading,
-  error,
+  errors,
   onImportFile,
   onImportFolder,
   onSelectSkill,
@@ -201,7 +201,6 @@ export function SkillPanel({
           </button>
         ) : null}
       </header>
-      {error ? <p className="panelError">{error}</p> : null}
       <div className="skillTabs" role="tablist" aria-label="技能與 Subagents">
         {panelTabs.map((tab) => {
           const selected = activeTab === tab.id;
@@ -230,6 +229,7 @@ export function SkillPanel({
           );
         })}
       </div>
+      {errors[activeTab] ? <p className="panelError">{errors[activeTab]}</p> : null}
       <div className="skillPanelBody">
         <section
           id="skill-panel-skills"

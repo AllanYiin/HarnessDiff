@@ -20,6 +20,7 @@ Common path parameters:
 
 - `project_id`: local id matching `proj_...`
 - `run_id`: local id matching `run_...`
+- `artifact_id`: local id matching `art_...`
 
 Common body parameters:
 
@@ -186,6 +187,78 @@ Deletes a project directory.
 
 Success: `204 No Content`
 
+### `GET /projects/{project_id}/artifacts`
+
+Lists project-local canvas artifacts. Optional query parameter:
+
+- `profile_id`: return only artifacts owned by that profile, such as `baseline` or `harness`
+
+Response:
+
+```json
+{
+  "artifacts": [
+    {
+      "id": "art_...",
+      "project_id": "proj_...",
+      "profile_id": "harness",
+      "kind": "single_page_html",
+      "title": "Landing page draft",
+      "content": "<!doctype html>...",
+      "version": 1,
+      "created_at": "2026-05-22T00:00:00+00:00",
+      "updated_at": "2026-05-22T00:00:00+00:00"
+    }
+  ]
+}
+```
+
+### `POST /projects/{project_id}/artifacts`
+
+Creates a project-local artifact document. Artifacts are stored under the project JSON store and are not written into the source tree.
+
+Request:
+
+```json
+{
+  "profile_id": "baseline",
+  "kind": "markdown",
+  "title": "NoHarness canvas",
+  "content": "# Draft",
+  "source_run_id": "run_..."
+}
+```
+
+Important fields:
+
+- `profile_id`: owning profile. Canvas updates are profile-local; a Harness update cannot patch the NoHarness artifact.
+- `kind`: one of `plain_text`, `markdown`, `single_page_html`, or `svg`.
+- `source_run_id`: optional run that produced or last proposed the content.
+
+Success: `201 Created`
+
+### `GET /projects/{project_id}/artifacts/{artifact_id}`
+
+Returns one artifact document.
+
+### `PATCH /projects/{project_id}/artifacts/{artifact_id}`
+
+Updates an artifact using optimistic concurrency. The request must include the saved `base_version`.
+
+Request:
+
+```json
+{
+  "base_version": 1,
+  "kind": "single_page_html",
+  "title": "Harness canvas",
+  "content": "<!doctype html>...",
+  "source_run_id": "run_..."
+}
+```
+
+If `base_version` does not match the stored artifact version, the backend returns `409 Conflict` with the requested and current versions. A successful patch increments `version`.
+
 ## Runs
 
 ### `POST /projects/{project_id}/runs`
@@ -229,8 +302,17 @@ Request:
     "memory_selection": true,
     "post_answer_critique": true,
     "token_budgeter": true,
-    "consequence_gate": true
+    "consequence_gate": true,
+    "artifact_review": true
   },
+  "artifact_refs": [
+    {
+      "artifact_id": "art_...",
+      "version": 1,
+      "profile_id": "harness",
+      "include_mode": "full"
+    }
+  ],
   "surface_payload": {
     "type": "agent",
     "objective": "Inspect the repository",
@@ -256,6 +338,8 @@ Important fields:
   - Legacy payloads using `context_manifest` are accepted and normalized to `context_summary`.
   - `consequence_gate` applies only to Harness profiles and records pre-provider `harness_decision` events for externally visible publication-like prompts.
   - Consequence preflight may include missing context, required scanner coverage gaps, scanner findings, similarity matches, claim evidence gaps, offer disclosure gaps, provenance/rights findings and gaps, and rollback readiness gaps. HarnessDiff records these as preview decisions before provider execution; it does not make NoHarness use the gate.
+  - `artifact_review` checks profile-local canvas update proposals, expected base versions, and single-page HTML constraints before the answer claims that a canvas edit is ready.
+- `artifact_refs`: optional profile-local artifact snapshots to include in run context. The backend validates each referenced artifact id, profile id, and version before creating the run. `include_mode` is `summary` or `full`.
 - `surface_payload`: optional. Agent projects accept an `agent` payload with objective/context/max step hints. If omitted for an Agent project, the backend derives the objective from `prompt`.
 
 Success: `201 Created`
@@ -327,6 +411,7 @@ Context section `estimated_tokens` are deterministic estimates derived from save
 Successful streamed runs write:
 
 ```text
+artifacts/{artifact_id}.json
 runs/{run_id}/run.json
 runs/{run_id}/attachments/{attachment_id}.txt
 runs/{run_id}/attachments/{attachment_id}.lines.txt
@@ -354,7 +439,7 @@ runs/{run_id}/harness_agent/usage.json
 runs/{run_id}/analysis/agent-analysis.json
 ```
 
-Profiles write `tool_names` to `input.json` when tools are available, and successful or failed tool calls are preserved as `tool_call` rows in `events.jsonl`. Harness chat profiles and `Harness Agent` with `tool_policy` enabled include guarded filesystem write/patch tools, `standard.shell.bash`, `standard.code.container_exec`, `harness.subagent.run`, and `multi_tool_use.parallel`; `NoHarness` and `NoHarness Agent` omit those higher-risk tools while retaining standard web/fs/data tools. Coding/test prompts can also write `execution_policy` to `input.json`; the OpenAI provider uses it to require a successful `standard.code.container_exec` output before the final response. PDF tools are attached per profile: NoHarness gets grep/line tools for long PDFs, while Harness gets progressive block search/read tools. `standard.code.container_exec` accepts `command`, optional `workdir`, and optional `timeout_seconds`, then runs the command against a temporary repository copy. Docker is the default backend; opt-in MXC preview support uses `HARNESSDIFF_CODE_RUNTIME_BACKEND=mxc|auto` plus `HARNESSDIFF_MXC_EXPERIMENTAL=1`. The public tool arguments stay unchanged, while results include `runtime_backend`, `containment`, `policy_hash`, `enforcement_gaps`, and `preview_warning`. `harness.subagent.run` accepts `subagent_id`, `task`, and `context`, then returns the subagent result as a normal function tool output.
+Profiles write `tool_names` to `input.json` when tools are available, and successful or failed tool calls are preserved as `tool_call` rows in `events.jsonl`. Harness chat profiles and `Harness Agent` with `tool_policy` enabled include guarded filesystem write/patch tools, `standard.shell.bash`, `standard.code.container_exec`, `harness.subagent.run`, and `multi_tool_use.parallel`; `NoHarness` and `NoHarness Agent` omit those higher-risk tools while retaining standard web/fs/data tools. Canvas writing in NoHarness is only a profile-local artifact update proposal and does not grant shell, container, filesystem write, patch, or subagent tools. Coding/test prompts can also write `execution_policy` to `input.json`; the OpenAI provider uses it to require a successful `standard.code.container_exec` output before the final response. PDF tools are attached per profile: NoHarness gets grep/line tools for long PDFs, while Harness gets progressive block search/read tools. `standard.code.container_exec` accepts `command`, optional `workdir`, and optional `timeout_seconds`, then runs the command against a temporary repository copy. Docker is the default backend; opt-in MXC preview support uses `HARNESSDIFF_CODE_RUNTIME_BACKEND=mxc|auto` plus `HARNESSDIFF_MXC_EXPERIMENTAL=1`. The public tool arguments stay unchanged, while results include `runtime_backend`, `containment`, `policy_hash`, `enforcement_gaps`, and `preview_warning`. `harness.subagent.run` accepts `subagent_id`, `task`, and `context`, then returns the subagent result as a normal function tool output.
 
 Subagent definitions are loaded from `~/.harnessdiff/agents/` when `harness.subagent.run` is invoked. Subagent instances are ephemeral and do not keep live state after the tool call, but their artifacts and token usage remain on disk. Definitions may include `tools: WebSearch, WebFetch` to let that subagent use only the mapped standard web search/fetch tools during its provider request; definitions without `tools:` still run with tools disabled. Subagent tool calls additionally write:
 

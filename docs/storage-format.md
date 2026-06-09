@@ -11,6 +11,8 @@ data/
       project.json
       config/
         harness.default.json
+      artifacts/
+        {artifact_id}.json
       runs/
 ```
 
@@ -52,6 +54,8 @@ Allowed `surface_type` values are `chat`, `workflow`, `agent`, and `multi_agents
 Each chat run must keep `Harness` and `NoHarness` data physically separated:
 
 ```text
+artifacts/
+  {artifact_id}.json
 runs/
   {run_id}/
     run.json
@@ -60,6 +64,28 @@ runs/
     analysis/
       analysis.json
 ```
+
+Canvas artifacts are also profile-owned. Integrated mode may create equivalent initial content for both profiles, but each profile receives a separate artifact id and version history after that point.
+
+## Artifact Document
+
+```json
+{
+  "schema_version": "2026-05-22.1",
+  "id": "art_...",
+  "project_id": "proj_...",
+  "profile_id": "harness",
+  "kind": "single_page_html",
+  "title": "Harness canvas",
+  "content": "<!doctype html>...",
+  "version": 1,
+  "source_run_id": "run_...",
+  "created_at": "2026-05-22T00:00:00+00:00",
+  "updated_at": "2026-05-22T00:00:00+00:00"
+}
+```
+
+Allowed `kind` values are `plain_text`, `markdown`, `single_page_html`, and `svg`. Artifacts live only in the project-local JSON store and are not written to the repository source tree. PATCH requests use `base_version`; mismatches are rejected so two panes or browser tabs cannot silently overwrite each other.
 
 Each Agent run uses the same profile-per-folder pattern with `baseline_agent` and `harness_agent`, plus a foreground step trace per profile:
 
@@ -111,8 +137,17 @@ runs/
     "memory_selection": true,
     "post_answer_critique": true,
     "token_budgeter": true,
-    "consequence_gate": true
+    "consequence_gate": true,
+    "artifact_review": true
   },
+  "artifact_refs": [
+    {
+      "artifact_id": "art_...",
+      "version": 1,
+      "profile_id": "harness",
+      "include_mode": "full"
+    }
+  ],
   "status": "submitted",
   "prompt": "User prompt",
   "surface_payload": {
@@ -148,6 +183,8 @@ Run status values are `submitted`, `running`, `completed`, `failed`, and `cancel
 
 `surface_payload` is optional and remains `null` for Chat runs. Agent runs store an `agent` payload; if the client omits it, the backend derives `objective` from `prompt`.
 
+`artifact_refs` records the artifact snapshots the client asked the run to use. The backend validates each artifact id, profile id, and version before creating `run.json`. During provider context assembly, each profile receives only matching refs for its own `profile_id`; NoHarness never receives the Harness canvas snapshot, and vice versa. `include_mode` is `summary` or `full`.
+
 PDF attachments are accepted in create-run requests with `data_base64`, but raw PDF bytes are excluded from stored JSON. During run creation the backend extracts local text and writes:
 
 ```text
@@ -176,12 +213,13 @@ Each project stores its default Harness module profile at `config/harness.defaul
     "memory_selection": { "enabled": true },
     "post_answer_critique": { "enabled": true },
     "token_budgeter": { "enabled": true },
-    "consequence_gate": { "enabled": true }
+    "consequence_gate": { "enabled": true },
+    "artifact_review": { "enabled": true }
   }
 }
 ```
 
-Run-level `harness_modules` are the effective booleans after applying API/UI overrides to the project config. They are stored in `run.json` and repeated in profile `input.json` files with the final instructions for traceability. Supported image attachments are stored on `run.json` as provider-ready image URLs; profile `input.json` repeats only attachment metadata. PDF attachments are stored as extracted-text index paths plus metadata, never as raw base64 bytes. Profiles also store `tool_names` for the tools sent to the provider and an `execution_policy` object when Harness coding/test prompts require code execution evidence. Harness profiles and `Harness Agent` with `tool_policy` enabled receive the full set, including guarded filesystem write/patch tools, `standard.shell.bash`, `standard.code.container_exec`, `harness.subagent.run`, and `multi_tool_use.parallel`; `NoHarness` and `NoHarness Agent` receive standard web/fs/data tools but omit those higher-risk tools. Code execution tool-call results record the selected backend (`docker` by default, experimental `mxc` only when opted in), containment details, policy hash, enforcement gaps, and preview warnings. PDF tool names are profile-specific: `attachment.pdf.grep` and `attachment.pdf.read_lines` for NoHarness long-PDF reading; `attachment.pdf.search_blocks`, `attachment.pdf.read_block`, and `attachment.pdf.read_blocks` for Harness progressive PDF reading. Harness profiles with `consequence_gate` enabled can also write `harness_decision` events before provider execution when the prompt appears to produce externally visible content. Those events may contain preview audit fields such as `missing_context`, `scanner_coverage_gaps`, `scanner_findings`, `similarity_matches`, `provenance_findings`, `claim_gaps`, `offer_disclosure_gaps`, `provenance_gaps`, and `rollback_constraints`; these are local trace data, not a production blacklist.
+Run-level `harness_modules` are the effective booleans after applying API/UI overrides to the project config. They are stored in `run.json` and repeated in profile `input.json` files with the final instructions for traceability. Supported image attachments are stored on `run.json` as provider-ready image URLs; profile `input.json` repeats only attachment metadata. PDF attachments are stored as extracted-text index paths plus metadata, never as raw base64 bytes. Profiles also store `tool_names` for the tools sent to the provider and an `execution_policy` object when Harness coding/test prompts require code execution evidence. Harness profiles and `Harness Agent` with `tool_policy` enabled receive the full set, including guarded filesystem write/patch tools, `standard.shell.bash`, `standard.code.container_exec`, `harness.subagent.run`, and `multi_tool_use.parallel`; `NoHarness` and `NoHarness Agent` receive standard web/fs/data tools but omit those higher-risk tools. NoHarness canvas edits are artifact-state updates only; they do not grant workspace write, patch, shell, container, or subagent capability. Code execution tool-call results record the selected backend (`docker` by default, experimental `mxc` only when opted in), containment details, policy hash, enforcement gaps, and preview warnings. PDF tool names are profile-specific: `attachment.pdf.grep` and `attachment.pdf.read_lines` for NoHarness long-PDF reading; `attachment.pdf.search_blocks`, `attachment.pdf.read_block`, and `attachment.pdf.read_blocks` for Harness progressive PDF reading. Harness profiles with `consequence_gate` enabled can also write `harness_decision` events before provider execution when the prompt appears to produce externally visible content. Those events may contain preview audit fields such as `missing_context`, `scanner_coverage_gaps`, `scanner_findings`, `similarity_matches`, `provenance_findings`, `claim_gaps`, `offer_disclosure_gaps`, `provenance_gaps`, and `rollback_constraints`; these are local trace data, not a production blacklist. `artifact_review` adds instructions to keep artifact update blocks aligned to the referenced artifact id/profile/base version, keep `single_page_html` output as one complete HTML document without default external script dependencies, and avoid claiming verification unless the execution policy actually ran the required tool.
 Older artifacts that use `context_manifest` are read as `context_summary` for backward compatibility.
 
 Profile `input.json`:

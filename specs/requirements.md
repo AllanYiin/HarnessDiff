@@ -14,6 +14,9 @@
 - 支援一鍵安裝啟動：`run_app.bat`、`run_app.command`、`run_app.sh`。
 - 支援新對話、歷史對話紀錄檢視、自動對話命名與暫停執行。
 - 支援 independent mode 中各 pane 獨立送出與串流；單一 pane 執行中不得鎖住另一個 pane。
+- 支援 `Artifact Canvas / Workbench`，在 chat/agent 主工作區旁提供 `plain_text`、`markdown`、`single_page_html`、`svg` 畫布；不得把現有 composer 擴成畫布。
+- NoHarness 與 Harness canvas 必須 profile-level 獨立。Integrated mode 只複製初始內容到兩份 profile-local artifact，後續各自保存版本，不得互相污染。
+- NoHarness 可產生並套用自己的 artifact update proposal，但這只是 project artifact 狀態更新；不得因此取得 shell、container、filesystem write/patch 或 subagent tools。
 - 支援 TopBar surface segmented control 在 Chat / Agent 間切換；執行中不得切換，需先完成或取消前景串流。
 - Agent mode 第一版以 `NoHarness Agent` vs `Harness Agent` 比較同一任務，支援前景 streaming、可取消、artifact 可追溯。
 - Agent mode 不支援背景續跑、durable checkpoint、跨重啟 resume 或任務排程。
@@ -22,6 +25,7 @@
 - Harness Agent 啟用 `tool_policy` 時，必須可使用 shell/container/code tools、`harness.subagent.run` 與 `multi_tool_use.parallel`；NoHarness Agent 不得取得這些高風險或 Harness 專屬工具。
 - Harness pane 啟用 `consequence_gate` 時，凡 prompt 看起來會產生對外發布、社群貼文、公告、行銷活動或客戶可見內容，必須在 provider 前產生 Consequence Gate preflight decision，記錄缺失情境、required scanner coverage gap、scanner finding、similarity match、claim evidence gap、offer disclosure gap、provenance/rights finding 與 gap、rollback readiness gap、潛在誤讀與審查需求；NoHarness 不得套用此 gate。
 - Consequence Gate 不得以品牌、國家事件或敏感詞黑名單作為主防線；HarnessDiff core 不得新增 OCR/CV/embedding 重依賴，只能接收或產生結構化 preflight/scanner adapter findings；相似度與來源追溯以 `similarity.match`、`provenance.review` 類 finding contract 呈現。
+- Harness pane 啟用 `artifact_review` 時，artifact update 必須對準 `artifact_id`、`profile_id`、`base_version`；`single_page_html` 必須保持完整單頁 HTML，預設不得載入外部 script。若回答宣稱已驗證 HTML 或程式碼，必須由 execution policy 觸發 `standard.code.container_exec` 並留下證據。
 - 自動建立 `~/.harnessdiff`、`CLAUDE.md`、`AGENTS.md`、`agents.md` 與 `skills/`；技能可由 UI 檢視與匯入 `.zip`、`.skill`/Markdown 單檔或資料夾。
 - 開啟新對話後的第一個 run 必須將已安裝技能第一層清單放入 provider 上文，內容限 `name` 與 `description`，完整 `SKILL.md` 僅在使用者選取或匯入時漸進式揭露。
 - 對話輸入框支援技能 slash command：輸入 `/` 顯示已安裝技能候選，插入或手打 `/skill-id` 後送出，該 run 必須載入對應完整 `SKILL.md` 作為本回合技能上下文。
@@ -37,12 +41,14 @@
 - target panes：`NoHarness` / `Harness`
 - per-run `harness_modules`
 - supported image and PDF attachments
+- profile-local `artifact_refs` and canvas content snapshots
 - installed skills first-layer context on a new conversation's first run
 
 輸出：
 
 - 左右 pane streaming assistant response
 - per-pane JSON artifacts
+- project-local canvas artifacts under `artifacts/{artifact_id}.json`
 - `analysis/analysis.json`
 - frontend analysis summary metrics
 - Harness pane risk preflight chips for consequence findings
@@ -62,6 +68,7 @@ Task model:
 - primary: submit prompt and compare two streamed responses
 - secondary: start a new conversation, inspect history, adjust model/reasoning/Harness modules, inspect/import skills
 - low-frequency: inspect local artifacts and docs
+- canvas task: edit text, Markdown, Mermaid diagrams, single-page HTML, or SVG beside the chat comparison and preview/diff the result
 - rare: package release ZIP
 
 State model:
@@ -84,6 +91,7 @@ Information-role classification:
 - `reference`: docs, specs, storage/API details, historical conversation list
 - `exception-handling`: run failed, provider error, corrupt JSON
 - `audit/history`: local JSON artifacts, DEVNOTE
+- `editing-surface`: Artifact Workbench canvas, preview, and diff
 
 Content audit:
 
@@ -95,6 +103,7 @@ Content audit:
 | new conversation / history actions | next-step-only | top bar buttons |
 | Harness module toggles | next-step-only | settings disclosure |
 | token/context metrics | status-feedback | compact analysis strip |
+| Artifact Workbench | must-see-when-editing | main workspace beside panes |
 | history conversation list | on-demand-reference | history drawer |
 | API/storage reference | on-demand-reference | docs |
 | corrupt JSON details | error-only | API response / troubleshooting |
@@ -114,6 +123,7 @@ Deferred blocks:
 
 - Runtime data root: `data/projects`
 - Project config: `config/harness.default.json`
+- Project canvas artifacts: `artifacts/{artifact_id}.json` with optimistic `version`
 - Run artifacts: `run.json`, `{pane}/input.json`, `{pane}/output.json`, `{pane}/events.jsonl`, `{pane}/usage.json`
 - PDF attachment artifacts: `attachments/{attachment_id}.txt`, `attachments/{attachment_id}.lines.txt`, `attachments/{attachment_id}.blocks.json` under each run directory
 - Analysis artifact: `analysis/analysis.json`
@@ -160,6 +170,7 @@ Reason: this is a shared teaching/demo tool that should be low-friction and stab
 - frontend TypeScript, Vitest, Vite build, and Playwright pass.
 - Playwright verifies history auto naming, Markdown rendering/copy, and pause execution.
 - Playwright verifies independent pane submission remains available while another pane is running.
+- Playwright verifies profile-local canvas editing, HTML preview iframe sandbox without same-origin, diff visibility, and that NoHarness/Harness canvas updates do not cross panes.
 - Agent runtime tests verify streaming, trace persistence, analysis artifact, transcript reconstruction, and Harness-only tool access.
 - Playwright backend-contract coverage must use the real local backend or an explicitly labeled fixture-only test that is not counted as backend integration.
 - README documents one-click startup and troubleshooting.

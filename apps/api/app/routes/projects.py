@@ -2,8 +2,19 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 
+from app.models.artifact import (
+    ArtifactCreate,
+    ArtifactDocument,
+    ArtifactListResponse,
+    ArtifactPatch,
+)
 from app.models.project import ProjectCreate, ProjectDocument, ProjectListResponse, ProjectUpdate
-from app.storage.errors import InvalidProjectIdError, ProjectNotFoundError, StorageCorruptionError
+from app.storage.errors import (
+    ArtifactVersionConflictError,
+    InvalidProjectIdError,
+    ProjectNotFoundError,
+    StorageCorruptionError,
+)
 from app.storage.project_store import ProjectStore
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -73,6 +84,68 @@ async def get_project_transcript(request: Request, project_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Project not found") from None
     except InvalidProjectIdError:
         raise HTTPException(status_code=400, detail="Invalid project id") from None
+
+
+@router.get("/{project_id}/artifacts", response_model=ArtifactListResponse)
+async def list_project_artifacts(
+    request: Request, project_id: str, profile_id: str | None = None
+) -> ArtifactListResponse:
+    try:
+        return get_store(request).list_artifacts(project_id, profile_id=profile_id)
+    except ProjectNotFoundError:
+        raise HTTPException(status_code=404, detail="Project not found") from None
+    except InvalidProjectIdError:
+        raise HTTPException(status_code=400, detail="Invalid project id") from None
+
+
+@router.post(
+    "/{project_id}/artifacts",
+    response_model=ArtifactDocument,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_project_artifact(
+    request: Request, project_id: str, payload: ArtifactCreate
+) -> ArtifactDocument:
+    try:
+        return get_store(request).create_artifact(project_id, payload)
+    except ProjectNotFoundError:
+        raise HTTPException(status_code=404, detail="Project not found") from None
+    except InvalidProjectIdError:
+        raise HTTPException(status_code=400, detail="Invalid project or profile id") from None
+
+
+@router.get("/{project_id}/artifacts/{artifact_id}", response_model=ArtifactDocument)
+async def get_project_artifact(
+    request: Request, project_id: str, artifact_id: str
+) -> ArtifactDocument:
+    try:
+        return get_store(request).get_artifact(project_id, artifact_id)
+    except ProjectNotFoundError:
+        raise HTTPException(status_code=404, detail="Artifact not found") from None
+    except InvalidProjectIdError:
+        raise HTTPException(status_code=400, detail="Invalid project or artifact id") from None
+
+
+@router.patch("/{project_id}/artifacts/{artifact_id}", response_model=ArtifactDocument)
+async def patch_project_artifact(
+    request: Request, project_id: str, artifact_id: str, payload: ArtifactPatch
+) -> ArtifactDocument:
+    try:
+        return get_store(request).patch_artifact(project_id, artifact_id, payload)
+    except ArtifactVersionConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Artifact version conflict",
+                "artifact_id": exc.artifact_id,
+                "expected_version": exc.expected_version,
+                "actual_version": exc.actual_version,
+            },
+        ) from None
+    except ProjectNotFoundError:
+        raise HTTPException(status_code=404, detail="Artifact not found") from None
+    except InvalidProjectIdError:
+        raise HTTPException(status_code=400, detail="Invalid project or artifact id") from None
 
 
 @router.patch("/{project_id}", response_model=ProjectDocument)

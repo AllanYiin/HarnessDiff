@@ -54,6 +54,7 @@ def default_profiles() -> list[ProfileConfig]:
                 "post_answer_critique": True,
                 "token_budgeter": True,
                 "consequence_gate": True,
+                "artifact_review": True,
             },
         ),
     ]
@@ -76,6 +77,7 @@ def default_agent_profiles() -> list[ProfileConfig]:
                 "post_answer_critique": True,
                 "token_budgeter": True,
                 "consequence_gate": True,
+                "artifact_review": True,
             },
         ),
     ]
@@ -145,6 +147,13 @@ class RunAttachment(BaseModel):
         return self
 
 
+class RunArtifactRef(BaseModel):
+    artifact_id: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$")
+    version: int = Field(ge=1)
+    profile_id: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$")
+    include_mode: Literal["summary", "full"] = "full"
+
+
 class RunCreate(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
 
@@ -154,6 +163,7 @@ class RunCreate(BaseModel):
     reasoning_effort: str = Field(default="medium", min_length=1)
     profiles: list[ProfileConfig] = Field(default_factory=default_profiles, min_length=1)
     attachments: list[RunAttachment] = Field(default_factory=list)
+    artifact_refs: list[RunArtifactRef] = Field(default_factory=list)
     surface_payload: AgentRunConfig | None = None
 
 
@@ -169,6 +179,7 @@ class RunDocument(BaseModel):
     reasoning_effort: str
     profiles: list[ProfileConfig]
     attachments: list[RunAttachment] = Field(default_factory=list)
+    artifact_refs: list[RunArtifactRef] = Field(default_factory=list)
     surface_payload: AgentRunConfig | None = None
     status: RunStatus = RunStatus.submitted
     prompt: str
@@ -196,6 +207,7 @@ def new_run_document(
         reasoning_effort=payload.reasoning_effort,
         profiles=profiles or payload.profiles,
         attachments=payload.attachments,
+        artifact_refs=payload.artifact_refs,
         surface_payload=payload.surface_payload,
         prompt=payload.prompt,
         created_at=now,

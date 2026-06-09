@@ -3,6 +3,7 @@ import type { AttachmentPreview, RunAttachmentInput, VisionAttachmentInput } fro
 const maxTextCharacters = 24_000;
 const maxCsvRows = 40;
 const supportedVisionMimeTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+const browserPreviewImageMimeTypes = new Set([...supportedVisionMimeTypes, "image/svg+xml"]);
 const supportedExtensions = new Set([
   ".txt",
   ".csv",
@@ -16,7 +17,8 @@ const supportedExtensions = new Set([
   ".jpeg",
   ".gif",
   ".webp",
-  ".bmp"
+  ".bmp",
+  ".svg"
 ]);
 
 type AttachmentKind = AttachmentPreview["kind"];
@@ -198,7 +200,7 @@ async function ingestFile(file: File): Promise<AttachmentPreview> {
 function detectKind(file: File): AttachmentKind {
   const name = file.name.toLowerCase();
   const extension = extensionOf(name);
-  if (file.type.startsWith("image/") || [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"].includes(extension)) {
+  if (file.type.startsWith("image/") || [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"].includes(extension)) {
     return "image";
   }
   if (extension === ".csv" || file.type === "text/csv") {
@@ -242,6 +244,10 @@ function normalizedImageMime(file: Pick<File, "name" | "type">) {
   if (extension === ".jpg" || extension === ".jpeg") return "image/jpeg";
   if (extension === ".webp") return "image/webp";
   if (extension === ".gif") return "image/gif";
+  if (extension === ".svg") return "image/svg+xml";
+  if (file.type.startsWith("image/") && browserPreviewImageMimeTypes.has(file.type)) {
+    return file.type;
+  }
   return file.type.startsWith("image/") ? file.type : "";
 }
 

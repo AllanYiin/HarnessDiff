@@ -2,10 +2,14 @@ import type {
   HarnessModules,
   InputMode,
   AgentStepTrace,
+  ArtifactCreateInput,
+  ArtifactDocument,
+  ArtifactPatchInput,
   MessageAttachment,
   ProfileId,
   ProfileInstance,
   RunAttachmentInput,
+  RunArtifactRef,
   SkillInvocationTrace,
   SurfaceType,
   ToolCallTrace,
@@ -199,6 +203,10 @@ export type ToolSummary = {
 
 export type ToolListResponse = {
   tools: ToolSummary[];
+};
+
+export type ArtifactListResponse = {
+  artifacts: ArtifactDocument[];
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -469,6 +477,7 @@ export async function createRun(params: {
   reasoningEffort: string;
   profiles: ProfileInstance[];
   attachments?: RunAttachmentInput[];
+  artifactRefs?: RunArtifactRef[];
   surfacePayload?: Record<string, unknown> | null;
 }): Promise<Run> {
   const response = await fetch(`/api/projects/${params.projectId}/runs`, {
@@ -481,11 +490,56 @@ export async function createRun(params: {
       reasoning_effort: params.reasoningEffort,
       profiles: params.profiles,
       attachments: params.attachments ?? [],
+      artifact_refs: params.artifactRefs ?? [],
       surface_payload: params.surfacePayload ?? null
     })
   });
   if (!response.ok) {
     throw new Error(await responseErrorMessage(response, "建立 run 失敗"));
+  }
+  return response.json();
+}
+
+export async function listArtifacts(
+  projectId: string,
+  profileId?: ProfileId
+): Promise<ArtifactDocument[]> {
+  const search = profileId ? `?profile_id=${encodeURIComponent(profileId)}` : "";
+  const response = await fetch(`/api/projects/${projectId}/artifacts${search}`);
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, "載入畫布失敗"));
+  }
+  const data = (await response.json()) as ArtifactListResponse;
+  return Array.isArray(data.artifacts) ? data.artifacts : [];
+}
+
+export async function createArtifact(
+  projectId: string,
+  payload: ArtifactCreateInput
+): Promise<ArtifactDocument> {
+  const response = await fetch(`/api/projects/${projectId}/artifacts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, "建立畫布失敗"));
+  }
+  return response.json();
+}
+
+export async function patchArtifact(
+  projectId: string,
+  artifactId: string,
+  payload: ArtifactPatchInput
+): Promise<ArtifactDocument> {
+  const response = await fetch(`/api/projects/${projectId}/artifacts/${artifactId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, "更新畫布失敗"));
   }
   return response.json();
 }

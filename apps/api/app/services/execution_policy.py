@@ -55,6 +55,20 @@ _IMPLEMENTATION_TERMS = (
     "請修改",
 )
 
+_CODE_CREATION_TERMS = (
+    "create",
+    "develop",
+    "scaffold",
+    "prototype",
+    "新增",
+    "建立",
+    "撰寫",
+    "開發",
+    "製作",
+    "打造",
+    "建構",
+)
+
 _CODE_CONTEXT_TERMS = (
     "code",
     "repo",
@@ -90,6 +104,41 @@ _CODE_CONTEXT_TERMS = (
     "前端",
 )
 
+_CODE_ARTIFACT_CONTEXT_TERMS = (
+    "code",
+    "app",
+    "component",
+    "frontend",
+    "backend",
+    "repo",
+    "repository",
+    "api",
+    "function",
+    "class",
+    "python",
+    "typescript",
+    "javascript",
+    "node",
+    "react",
+    "vite",
+    "vitest",
+    "pytest",
+    "package.json",
+    ".py",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    "程式",
+    "代碼",
+    "程式碼",
+    "原型",
+    "元件",
+    "前端",
+    "後端",
+    "測試",
+)
+
 _EXPLANATION_STARTS = (
     "why ",
     "explain",
@@ -105,6 +154,22 @@ _EXPLANATION_STARTS = (
     "比較",
     "規劃",
     "整理",
+)
+
+_EXPLANATION_ACTION_TERMS = (
+    "please fix",
+    "please implement",
+    "please create",
+    "please build",
+    "fix ",
+    "implement ",
+    "請修改",
+    "請修正",
+    "請實作",
+    "請建立",
+    "請新增",
+    "請開發",
+    "請製作",
 )
 
 _PLANNING_ONLY_HINTS = (
@@ -146,16 +211,26 @@ def requires_code_execution_evidence(task_text: str) -> bool:
     has_execution = _contains_any(normalized, _EXECUTION_TERMS)
     has_implementation = _contains_any(normalized, _IMPLEMENTATION_TERMS)
     has_code_context = _contains_any(normalized, _CODE_CONTEXT_TERMS)
+    has_code_creation = _contains_any(normalized, _CODE_CREATION_TERMS)
+    has_code_artifact_context = _contains_any(
+        normalized, _CODE_ARTIFACT_CONTEXT_TERMS
+    )
+    has_code_creation_task = has_code_creation and has_code_artifact_context
     starts_as_explanation = normalized.startswith(_EXPLANATION_STARTS)
-    if starts_as_explanation and not has_implementation:
+    has_explicit_action_after_explanation = _contains_any(
+        normalized, _EXPLANATION_ACTION_TERMS
+    )
+    if starts_as_explanation and not has_explicit_action_after_explanation:
         return False
     if not has_execution and _contains_any(normalized, _PLANNING_ONLY_HINTS):
         return False
-    if not has_execution and not has_implementation:
+    if not has_execution and not has_implementation and not has_code_creation_task:
         return False
     if has_execution:
         return True
     if has_implementation and has_code_context:
+        return True
+    if has_code_creation_task:
         return True
 
     return has_implementation and not starts_as_explanation

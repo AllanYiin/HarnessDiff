@@ -42,7 +42,8 @@ describe("file ingestion", () => {
       new File(["fake"], "sheet.xlsx"),
       new File(["fake"], "deck.pptx"),
       new File(["fake"], "paper.pdf", { type: "application/pdf" }),
-      new File(["fake"], "image.png", { type: "image/png" })
+      new File(["fake"], "image.png", { type: "image/png" }),
+      new File(['<svg xmlns="http://www.w3.org/2000/svg"></svg>'], "icon.svg")
     ]);
 
     expect(attachments.map((attachment) => attachment.kind)).toEqual([
@@ -50,11 +51,19 @@ describe("file ingestion", () => {
       "spreadsheet",
       "presentation",
       "pdf",
+      "image",
       "image"
     ]);
     expect(attachments.every((attachment) => attachment.status === "ready")).toBe(true);
-    expect(attachments.at(-1)?.url).toBe("blob:image");
-    expect(attachments.at(-1)?.dataUrl).toBe("data:image/png;base64,ZmFrZQ==");
+    expect(attachments[4].url).toBe("blob:image");
+    expect(attachments[4].dataUrl).toBe("data:image/png;base64,ZmFrZQ==");
+    expect(attachments[5]).toMatchObject({
+      name: "icon.svg",
+      type: "image/svg+xml",
+      url: "blob:image",
+      visionSupported: false
+    });
+    expect(attachments[5].dataUrl).toBeUndefined();
     expect(attachmentVisionInputs(attachments)).toEqual([
       {
         kind: "image",
@@ -83,6 +92,6 @@ describe("file ingestion", () => {
         detail: "auto"
       }
     ]);
-    expect(createObjectURL).toHaveBeenCalledOnce();
+    expect(createObjectURL).toHaveBeenCalledTimes(2);
   });
 });

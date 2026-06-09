@@ -37,6 +37,13 @@ HARNESS_MODULE_INSTRUCTIONS = {
         "If release context or evidence is missing, ask for it or provide a clearly "
         "non-publishable draft instead of relying on a human to notice the risk."
     ),
+    "artifact_review": (
+        "When a profile artifact canvas is provided, verify proposed edits target the "
+        "correct artifact id, profile id, and base version. For single-page HTML, keep "
+        "the output as one complete HTML document, avoid external script dependencies "
+        "unless explicitly requested, and do not claim browser/runtime verification unless "
+        "the required execution evidence tool actually ran."
+    ),
 }
 
 

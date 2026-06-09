@@ -1,6 +1,7 @@
 import { AgentPane } from "./AgentPane";
 import type { AnalysisDocument, SkillSummary, ToolSummary } from "../api";
 import type { AgentStepTrace, ProfileId, ProfileInstance, ProfileState } from "../types";
+import type { ReactNode } from "react";
 
 type AgentWorkspaceProps = {
   profiles: ProfileInstance[];
@@ -10,6 +11,7 @@ type AgentWorkspaceProps = {
   skills: SkillSummary[];
   tools: ToolSummary[];
   model: string;
+  renderArtifactLayer?: (profile: ProfileInstance) => ReactNode;
 };
 
 export function AgentWorkspace({
@@ -19,22 +21,25 @@ export function AgentWorkspace({
   analysis,
   skills,
   tools,
-  model
+  model,
+  renderArtifactLayer
 }: AgentWorkspaceProps) {
   return (
     <section className="workspace agentWorkspace" aria-label="HarnessDiff agent comparison">
       {profiles.map((profile) => (
-        <AgentPane
-          key={profile.id}
-          profile={profile}
-          messages={profileState[profile.id]?.messages ?? []}
-          steps={steps[profile.id] ?? []}
-          streaming={profileState[profile.id]?.streaming ?? false}
-          analysis={analysis?.profiles[profile.id]}
-          skills={skills}
-          tools={tools}
-          model={model}
-        />
+        <div className="profileWorkColumn" key={profile.id}>
+          <AgentPane
+            profile={profile}
+            messages={profileState[profile.id]?.messages ?? []}
+            steps={steps[profile.id] ?? []}
+            streaming={profileState[profile.id]?.streaming ?? false}
+            analysis={analysis?.profiles[profile.id]}
+            skills={skills}
+            tools={tools}
+            model={model}
+          />
+          {renderArtifactLayer?.(profile)}
+        </div>
       ))}
     </section>
   );

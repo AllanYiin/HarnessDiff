@@ -1,8 +1,26 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
 
-import { splitRequestedSkillDetails } from "./MarkdownContent";
+import { render, screen, waitFor } from "@testing-library/react";
+import { createElement } from "react";
+import mermaid from "mermaid";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { MarkdownContent, splitRequestedSkillDetails } from "./MarkdownContent";
+
+vi.mock("mermaid", () => ({
+  default: {
+    initialize: vi.fn(),
+    render: vi.fn(async () => ({
+      svg: '<svg role="img" aria-label="Rendered test diagram"><text>diagram</text></svg>'
+    }))
+  }
+}));
 
 describe("MarkdownContent skill disclosure parsing", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("splits requested skill details into a dedicated disclosure part", () => {
     const parts = splitRequestedSkillDetails(
       [
@@ -30,5 +48,31 @@ describe("MarkdownContent skill disclosure parsing", () => {
         ]
       }
     ]);
+  });
+
+  it("renders mermaid code fences as diagram previews", async () => {
+    render(
+      createElement(MarkdownContent, {
+        source: [
+          "```mermaid",
+          "flowchart LR",
+          "  A[Start] --> B[Done]",
+          "```"
+        ].join("\n")
+      })
+    );
+
+    await screen.findByLabelText("Mermaid diagram preview");
+    expect(mermaid.initialize).toHaveBeenCalledWith({
+      startOnLoad: false,
+      securityLevel: "strict",
+      theme: "default"
+    });
+    await waitFor(() => {
+      expect(mermaid.render).toHaveBeenCalledWith(
+        expect.stringMatching(/^mermaid-/),
+        "flowchart LR\n  A[Start] --> B[Done]"
+      );
+    });
   });
 });

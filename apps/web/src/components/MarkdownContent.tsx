@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
+import mermaid from "mermaid";
 
 type MarkdownContentProps = {
   source: string;
@@ -20,6 +21,20 @@ type Block =
   | { type: "code"; code: string; language?: string }
   | { type: "table"; headers: string[]; rows: string[][] }
   | { type: "list"; ordered: boolean; items: string[] };
+
+let mermaidInitialized = false;
+
+function ensureMermaidInitialized() {
+  if (mermaidInitialized) {
+    return;
+  }
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: "strict",
+    theme: "default"
+  });
+  mermaidInitialized = true;
+}
 
 function isSafeUrl(url: string) {
   return /^(https?:|mailto:)/i.test(url);
@@ -254,6 +269,9 @@ function renderMarkdownBlocks(source: string, keyPrefix: string) {
       return <blockquote key={key}>{renderInlineWithBreaks(block.text, `quote-${key}`)}</blockquote>;
     }
     if (block.type === "code") {
+      if ((block.language ?? "").toLowerCase() === "mermaid") {
+        return <MermaidDiagram code={block.code} key={key} />;
+      }
       return (
         <pre key={key}>
           <code>{block.code}</code>
@@ -320,6 +338,71 @@ function renderSkillDisclosure(details: RequestedSkillDetail[], key: string) {
       </div>
     </details>
   );
+}
+
+function MermaidDiagram({ code }: { code: string }) {
+  const reactId = useId().replace(/[^a-zA-Z0-9_-]/g, "");
+  const [svg, setSvg] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    const renderId = `mermaid-${reactId}-${hashString(code)}`;
+
+    ensureMermaidInitialized();
+    setSvg("");
+    setError("");
+
+    mermaid
+      .render(renderId, code)
+      .then((result) => {
+        if (!cancelled) {
+          setSvg(result.svg);
+        }
+      })
+      .catch((renderError: unknown) => {
+        if (!cancelled) {
+          setError(renderError instanceof Error ? renderError.message : String(renderError));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [code, reactId]);
+
+  if (error) {
+    return (
+      <figure className="mermaidDiagram mermaidDiagramError">
+        <figcaption>Mermaid render failed</figcaption>
+        <pre>
+          <code>{code}</code>
+        </pre>
+      </figure>
+    );
+  }
+
+  if (!svg) {
+    return <div className="mermaidDiagram mermaidDiagramLoading" aria-label="Rendering Mermaid diagram" />;
+  }
+
+  return (
+    <figure className="mermaidDiagram">
+      <div
+        aria-label="Mermaid diagram preview"
+        className="mermaidDiagramSvg"
+        dangerouslySetInnerHTML={{ __html: svg }}
+      />
+    </figure>
+  );
+}
+
+function hashString(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash.toString(36);
 }
 
 export function MarkdownContent({ source }: MarkdownContentProps) {

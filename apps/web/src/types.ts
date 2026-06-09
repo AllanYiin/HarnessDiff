@@ -14,7 +14,8 @@ export type HarnessModuleId =
   | "memory_selection"
   | "post_answer_critique"
   | "token_budgeter"
-  | "consequence_gate";
+  | "consequence_gate"
+  | "artifact_review";
 
 export type HarnessModules = Record<HarnessModuleId, boolean>;
 
@@ -126,6 +127,47 @@ export type AgentRunConfig = {
   max_steps?: number;
   allow_subagents?: boolean;
   allow_container_tools?: boolean;
+};
+
+export type ArtifactKind = "plain_text" | "markdown" | "single_page_html" | "svg";
+
+export type ArtifactIncludeMode = "summary" | "full";
+
+export type ArtifactDocument = {
+  schema_version: string;
+  id: string;
+  project_id: string;
+  profile_id: ProfileId;
+  kind: ArtifactKind;
+  title: string;
+  content: string;
+  version: number;
+  source_run_id?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ArtifactCreateInput = {
+  profile_id: ProfileId;
+  kind: ArtifactKind;
+  title: string;
+  content: string;
+  source_run_id?: string | null;
+};
+
+export type ArtifactPatchInput = {
+  base_version: number;
+  title?: string;
+  kind?: ArtifactKind;
+  content?: string;
+  source_run_id?: string | null;
+};
+
+export type RunArtifactRef = {
+  artifact_id: string;
+  version: number;
+  profile_id: ProfileId;
+  include_mode: ArtifactIncludeMode;
 };
 
 export type AgentStepTrace = {
