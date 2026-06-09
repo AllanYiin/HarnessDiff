@@ -40,7 +40,7 @@ from app.services.skill_routing_review import (
 )
 from app.services.subagent_definitions import DEFAULT_SUBAGENTS
 from app.services.subagent_runtime import SUBAGENT_TOOL_NAME, SubagentToolRuntime
-from app.services.tool_runtime import _estimate_text_tokens
+from app.services.tool_runtime import WRITE_TOOL_NAMES, _estimate_text_tokens
 from app.services.tool_runtime import ToolAnythingRuntime
 from app.storage.json_io import write_json_atomic
 from app.storage.project_store import ProjectStore
@@ -51,6 +51,7 @@ logger = logging.getLogger(__name__)
 NO_HARNESS_EXCLUDED_TOOL_NAMES: tuple[str, ...] = (
     "standard.shell.bash",
     CONTAINER_CODE_TOOL_NAME,
+    *WRITE_TOOL_NAMES,
 )
 
 

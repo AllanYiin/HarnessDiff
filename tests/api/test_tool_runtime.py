@@ -17,12 +17,14 @@ def test_tool_runtime_exposes_only_allowed_readonly_tools(tmp_path) -> None:
     runtime = ToolAnythingRuntime(tmp_path)
 
     assert set(runtime.list_tool_names()) == set(ALLOWED_TOOL_NAMES)
-    assert "standard.fs.write" not in runtime.list_tool_names()
-    assert "standard.fs.patch_text" not in runtime.list_tool_names()
+    assert "standard.fs.write" in runtime.list_tool_names()
+    assert "standard.fs.patch_text" in runtime.list_tool_names()
     assert "standard.fs.read" not in runtime.list_tool_names()
 
     openai_names = {tool["name"] for tool in runtime.list_openai_tools()}
     assert "standard_fs_read" not in openai_names
+    assert "standard_fs_write" in openai_names
+    assert "standard_fs_patch_text" in openai_names
     assert "standard_fs_grep" in openai_names
     assert "standard_web_fetch" in openai_names
     assert "standard_shell_bash" in openai_names
@@ -87,6 +89,57 @@ def test_tool_runtime_invokes_filesystem_and_data_tools(tmp_path) -> None:
     )
     assert parse_result.ok is True
     assert parse_result.result["value"] == {"ok": True}
+
+
+def test_tool_runtime_write_tool_requires_hash_for_overwrite(tmp_path) -> None:
+    runtime = ToolAnythingRuntime(tmp_path)
+
+    created = asyncio.run(
+        runtime.invoke_openai_tool(
+            "standard_fs_write",
+            {
+                "root_id": "workspace",
+                "relative_path": "new-app/src/main.tsx",
+                "content": "console.log('created')\n",
+                "encoding": "utf-8",
+            },
+        )
+    )
+
+    assert created.ok is True
+    assert created.result["created"] is True
+    assert (tmp_path / "new-app" / "src" / "main.tsx").read_text(encoding="utf-8") == (
+        "console.log('created')\n"
+    )
+
+    blocked = asyncio.run(
+        runtime.invoke_openai_tool(
+            "standard_fs_write",
+            {
+                "root_id": "workspace",
+                "relative_path": "new-app/src/main.tsx",
+                "content": "console.log('overwrite')\n",
+                "encoding": "utf-8",
+            },
+        )
+    )
+    assert blocked.ok is False
+    assert "expected_sha256 is required" in blocked.error["message"]
+
+    replaced = asyncio.run(
+        runtime.invoke_openai_tool(
+            "standard_fs_write",
+            {
+                "root_id": "workspace",
+                "relative_path": "new-app/src/main.tsx",
+                "content": "console.log('overwrite')\n",
+                "expected_sha256": created.result["sha256"],
+                "encoding": "utf-8",
+            },
+        )
+    )
+    assert replaced.ok is True
+    assert replaced.result["replaced"] is True
 
 
 def test_tool_runtime_blocks_filesystem_escape(tmp_path) -> None:

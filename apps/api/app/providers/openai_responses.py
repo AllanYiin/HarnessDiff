@@ -122,10 +122,6 @@ class OpenAIResponsesProvider(LLMProvider):
                         )
 
             function_calls = _function_calls(completed_response)
-            if required_tool_openai_names and function_calls:
-                required_tool_satisfied = any(
-                    call["name"] in required_tool_openai_names for call in function_calls
-                ) or required_tool_satisfied
             if (
                 not request.tools_enabled
                 or request.tool_context is None
@@ -200,6 +196,13 @@ class OpenAIResponsesProvider(LLMProvider):
                     call["name"],
                     call["arguments"],
                 )
+                output_payload = _function_call_output_payload(invocation)
+                if (
+                    call["name"] in required_tool_openai_names
+                    and isinstance(output_payload, dict)
+                    and output_payload.get("ok") is True
+                ):
+                    required_tool_satisfied = True
                 yield ProviderEvent(
                     type="tool_call",
                     profile_id=request.profile_id,
@@ -215,7 +218,7 @@ class OpenAIResponsesProvider(LLMProvider):
                         "type": "function_call_output",
                         "call_id": call["call_id"],
                         "output": json.dumps(
-                            _function_call_output_payload(invocation),
+                            output_payload,
                             ensure_ascii=False,
                             default=str,
                         ),

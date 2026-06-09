@@ -29,7 +29,18 @@ ALLOWED_TOOL_NAMES: tuple[str, ...] = (
     "standard.data.csv_inspect",
     "standard.data.jsonl_inspect",
     "standard.shell.bash",
+    "standard.fs.write",
+    "standard.fs.replace_if_match",
+    "standard.fs.patch_text",
+    "standard.fs.apply_unified_patch",
     CONTAINER_CODE_TOOL_NAME,
+)
+
+WRITE_TOOL_NAMES: tuple[str, ...] = (
+    "standard.fs.write",
+    "standard.fs.replace_if_match",
+    "standard.fs.patch_text",
+    "standard.fs.apply_unified_patch",
 )
 
 
@@ -85,7 +96,7 @@ class ToolAnythingRuntime:
             self.registry,
             StandardToolOptions(
                 roots={"workspace": self.root},
-                include_write_tools=False,
+                include_write_tools=True,
             ),
         )
         self.registry.register(

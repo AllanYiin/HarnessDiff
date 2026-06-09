@@ -180,6 +180,8 @@ def test_run_stream_writes_profile_outputs_usage_and_harnessable_trace(tmp_path)
     assert "standard_web_search" in baseline_openai_tools
     assert "standard_shell_bash" not in baseline_openai_tools
     assert "standard_code_container_exec" not in baseline_openai_tools
+    assert "standard_fs_write" not in baseline_openai_tools
+    assert "standard_fs_patch_text" not in baseline_openai_tools
     assert "harness_subagent_run" not in baseline_openai_tools
     assert "multi_tool_use_parallel" not in baseline_openai_tools
     assert "skill_routing_review" not in baseline_openai_tools
@@ -187,6 +189,8 @@ def test_run_stream_writes_profile_outputs_usage_and_harnessable_trace(tmp_path)
     assert harness_openai_tool_names[1] == "standard_code_container_exec"
     assert "standard_shell_bash" in harness_openai_tools
     assert "standard_code_container_exec" in harness_openai_tools
+    assert "standard_fs_write" in harness_openai_tools
+    assert "standard_fs_patch_text" in harness_openai_tools
     assert "harness_subagent_run" in harness_openai_tools
     assert "multi_tool_use_parallel" in harness_openai_tools
     assert "skill_routing_review" in harness_openai_tools
@@ -210,6 +214,8 @@ def test_run_stream_writes_profile_outputs_usage_and_harnessable_trace(tmp_path)
     assert "standard.web.search" in baseline_input["tool_names"]
     assert "standard.shell.bash" not in baseline_input["tool_names"]
     assert "standard.code.container_exec" not in baseline_input["tool_names"]
+    assert "standard.fs.write" not in baseline_input["tool_names"]
+    assert "standard.fs.patch_text" not in baseline_input["tool_names"]
     assert "harness.subagent.run" not in baseline_input["tool_names"]
     assert "multi_tool_use.parallel" not in baseline_input["tool_names"]
     assert "skill_routing_review" not in baseline_input["tool_names"]
@@ -219,6 +225,8 @@ def test_run_stream_writes_profile_outputs_usage_and_harnessable_trace(tmp_path)
     assert harness_input["tool_names"][1] == "standard.code.container_exec"
     assert "standard.shell.bash" in harness_input["tool_names"]
     assert "standard.code.container_exec" in harness_input["tool_names"]
+    assert "standard.fs.write" in harness_input["tool_names"]
+    assert "standard.fs.patch_text" in harness_input["tool_names"]
     assert "harness.subagent.run" in harness_input["tool_names"]
     assert "multi_tool_use.parallel" in harness_input["tool_names"]
     assert "skill_routing_review" in harness_input["tool_names"]

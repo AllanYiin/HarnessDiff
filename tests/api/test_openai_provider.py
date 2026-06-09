@@ -471,6 +471,81 @@ def test_openai_provider_retries_once_when_required_execution_is_missing() -> No
     assert runtime.calls == [("standard_code_container_exec", {"command": "pytest"})]
 
 
+def test_openai_provider_requires_successful_code_execution_output() -> None:
+    runtime = FakeCodeToolRuntime(ok_by_call=(False, True))
+    client = FakeOpenAIClient(
+        [
+            [
+                SimpleNamespace(
+                    type="response.completed",
+                    response=SimpleNamespace(
+                        id="resp_failed_tool",
+                        output=[
+                            {
+                                "type": "function_call",
+                                "name": "standard_code_container_exec",
+                                "call_id": "call_failed",
+                                "arguments": '{"command":"pytest"}',
+                            }
+                        ],
+                    ),
+                )
+            ],
+            [
+                SimpleNamespace(
+                    type="response.completed",
+                    response=SimpleNamespace(
+                        id="resp_success_tool",
+                        output=[
+                            {
+                                "type": "function_call",
+                                "name": "standard_code_container_exec",
+                                "call_id": "call_success",
+                                "arguments": '{"command":"pytest"}',
+                            }
+                        ],
+                    ),
+                )
+            ],
+            [
+                SimpleNamespace(type="response.output_text.delta", delta="verified"),
+                SimpleNamespace(
+                    type="response.completed",
+                    response=SimpleNamespace(id="resp_final", output=[]),
+                ),
+            ],
+        ]
+    )
+    provider = OpenAIResponsesProvider(api_key="test", client_factory=lambda: client)
+    request = LLMRequest(
+        profile_id="harness",
+        profile_label="Harness",
+        model="fake-model",
+        reasoning_effort="medium",
+        instructions="test",
+        prompt="請修改並跑測試",
+        tools_enabled=True,
+        tool_context=runtime,
+        execution_policy={
+            "requires_execution_evidence": True,
+            "required_tool_names": ["standard.code.container_exec"],
+        },
+    )
+
+    events = asyncio.run(_collect_provider_events(provider, request))
+
+    assert client.calls[0]["tool_choice"]["mode"] == "required"
+    assert client.calls[1]["tool_choice"]["mode"] == "required"
+    assert "tool_choice" not in client.calls[2]
+    assert runtime.calls == [
+        ("standard_code_container_exec", {"command": "pytest"}),
+        ("standard_code_container_exec", {"command": "pytest"}),
+    ]
+    failed_output = json.loads(client.calls[1]["input"][0]["output"])
+    assert failed_output["ok"] is False
+    assert any(event.type == "delta" and event.text == "verified" for event in events)
+
+
 def test_openai_provider_enriches_web_tool_output_with_citation_sources() -> None:
     runtime = FakeWebToolRuntime()
     client = FakeOpenAIClient(
@@ -624,11 +699,21 @@ async def _collect_provider_events(
 
 
 class FakeInvocation:
-    def __init__(self, name: str, arguments: dict) -> None:
+    def __init__(self, name: str, arguments: dict, *, ok: bool = True) -> None:
         self.name = name
         self.arguments = arguments
+        self.ok = ok
 
     def event_payload(self) -> dict:
+        if not self.ok:
+            return {
+                "ok": False,
+                "tool_name": self.name,
+                "openai_name": self.name,
+                "arguments": self.arguments,
+                "elapsed_ms": 1,
+                "error": {"type": "RuntimeUnavailable", "message": "Docker unavailable"},
+            }
         return {
             "ok": True,
             "tool_name": self.name,
@@ -639,6 +724,12 @@ class FakeInvocation:
         }
 
     def output_payload(self) -> dict:
+        if not self.ok:
+            return {
+                "ok": False,
+                "tool_name": self.name,
+                "error": {"type": "RuntimeUnavailable", "message": "Docker unavailable"},
+            }
         return {"ok": True, "tool_name": self.name, "result": {"text": "file content"}}
 
 
@@ -665,8 +756,9 @@ class FakeToolRuntime:
 
 
 class FakeCodeToolRuntime:
-    def __init__(self) -> None:
+    def __init__(self, ok_by_call: tuple[bool, ...] = ()) -> None:
         self.calls = []
+        self.ok_by_call = ok_by_call
 
     def list_openai_tools(self) -> list[dict]:
         return [
@@ -683,7 +775,9 @@ class FakeCodeToolRuntime:
 
     async def invoke_openai_tool(self, openai_name: str, arguments: dict) -> FakeInvocation:
         self.calls.append((openai_name, arguments))
-        return FakeInvocation(openai_name, arguments)
+        call_index = len(self.calls) - 1
+        ok = self.ok_by_call[call_index] if call_index < len(self.ok_by_call) else True
+        return FakeInvocation(openai_name, arguments, ok=ok)
 
 
 class FakeWebInvocation:
