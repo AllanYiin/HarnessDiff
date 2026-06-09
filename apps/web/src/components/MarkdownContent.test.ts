@@ -115,4 +115,59 @@ describe("MarkdownContent skill disclosure parsing", () => {
     expect(frame.getAttribute("srcdoc")).toContain("<svg");
     expect(frame.getAttribute("srcdoc")).not.toContain("<?xml");
   });
+
+  it("keeps streaming incomplete svg fences as code until the svg closes", () => {
+    const { rerender } = render(
+      createElement(MarkdownContent, {
+        source: ["```svg", '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">'].join(
+          "\n"
+        )
+      })
+    );
+
+    expect(screen.queryByTitle("SVG code preview")).toBeNull();
+    expect(screen.getByText(/<svg xmlns=/)).toBeTruthy();
+
+    rerender(
+      createElement(MarkdownContent, {
+        source: [
+          "```svg",
+          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">',
+          '<circle cx="5" cy="5" r="4" />',
+          "</svg>"
+        ].join("\n")
+      })
+    );
+
+    expect(screen.getByTitle("SVG code preview").getAttribute("srcdoc")).toContain("<circle");
+  });
+
+  it("remounts the svg preview frame when streaming updates the svg body", () => {
+    const { rerender } = render(
+      createElement(MarkdownContent, {
+        source: [
+          "```svg",
+          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">',
+          '<circle cx="5" cy="5" r="4" />',
+          "</svg>"
+        ].join("\n")
+      })
+    );
+    const firstFrame = screen.getByTitle("SVG code preview");
+
+    rerender(
+      createElement(MarkdownContent, {
+        source: [
+          "```svg",
+          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">',
+          '<rect width="10" height="10" />',
+          "</svg>"
+        ].join("\n")
+      })
+    );
+
+    const updatedFrame = screen.getByTitle("SVG code preview");
+    expect(updatedFrame).not.toBe(firstFrame);
+    expect(updatedFrame.getAttribute("srcdoc")).toContain("<rect");
+  });
 });

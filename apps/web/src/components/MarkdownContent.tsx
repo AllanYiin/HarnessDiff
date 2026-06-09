@@ -41,11 +41,20 @@ function isSafeUrl(url: string) {
 }
 
 function isSvgSource(source: string) {
-  return /^\s*(?:<\?xml[^>]*>\s*)?<svg[\s>]/i.test(source);
+  return normalizedSvgSource(source).toLowerCase().startsWith("<svg");
+}
+
+function isCompleteSvgSource(source: string) {
+  const svg = normalizedSvgSource(source);
+  return /^<svg[\s\S]*\/>\s*$/i.test(svg) || /<\/svg>\s*$/i.test(svg);
+}
+
+function normalizedSvgSource(source: string) {
+  return source.replace(/^\s*<\?xml[^>]*>\s*/i, "").trimStart();
 }
 
 function svgPreviewDocument(source: string) {
-  const svg = source.replace(/^\s*<\?xml[^>]*>\s*/i, "");
+  const svg = normalizedSvgSource(source);
   return [
     "<!doctype html>",
     '<html><head><meta charset="utf-8"><style>',
@@ -291,7 +300,7 @@ function renderMarkdownBlocks(source: string, keyPrefix: string) {
       if (language === "mermaid") {
         return <MermaidDiagram code={block.code} key={key} />;
       }
-      if (language === "svg" || isSvgSource(block.code)) {
+      if ((language === "svg" || isSvgSource(block.code)) && isCompleteSvgSource(block.code)) {
         return <SvgCodePreview code={block.code} key={key} />;
       }
       return (
@@ -367,6 +376,7 @@ function SvgCodePreview({ code }: { code: string }) {
     <figure className="svgCodePreview">
       <iframe
         className="svgCodePreviewFrame"
+        key={hashString(code)}
         sandbox=""
         srcDoc={svgPreviewDocument(code)}
         title="SVG code preview"
