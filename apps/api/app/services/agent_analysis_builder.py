@@ -61,6 +61,7 @@ def _build_agent_profile_analysis(
     harness_modules = normalize_harness_modules(input_doc.get("harness_modules", {}))
     enabled_modules = [name for name, enabled in harness_modules.items() if enabled]
     harness_decisions = _events_with_key(profile_dir / "events.jsonl", "harness_decision")
+    skill_invocations = _skill_invocations(profile_dir / "events.jsonl")
     subagents = _subagent_analyses(profile_dir)
     subagent_usage_total = _sum_usage(
         subagent.current_turn_usage for subagent in subagents.values()
@@ -68,6 +69,13 @@ def _build_agent_profile_analysis(
     tool_names = input_doc.get("tool_names", [])
     tool_text = ", ".join(str(name) for name in tool_names) if isinstance(tool_names, list) else ""
     steps_text = _steps_summary(profile_dir / "steps.jsonl")
+    conversation_messages = input_doc.get("conversation_messages", [])
+    history_characters = _conversation_messages_characters(conversation_messages)
+    provider_context_keys = ["instructions", "prompt"]
+    if skill_invocations:
+        provider_context_keys.append("skills")
+    if tool_text:
+        provider_context_keys.append("tools")
     return ProfileAnalysis(
         profile_id=profile_id,
         profile_label=profile_label,
@@ -81,12 +89,17 @@ def _build_agent_profile_analysis(
                 str(input_doc.get("instructions", "")),
                 "Final agent instructions sent to the provider.",
             ),
-            _section(
-                "tool_definitions",
-                "Tool definitions",
-                "sent" if tool_text else "not_configured",
-                tool_text,
-                "Tool definitions available to this agent profile.",
+            _tool_definition_section(input_doc, tool_text),
+            _activated_skill_section(skill_invocations),
+            ContextSection(
+                key="stored_conversation_history",
+                label="Stored conversation history",
+                status="sent" if history_characters else "not_configured",
+                characters=history_characters,
+                estimated_tokens=_estimate_tokens(history_characters),
+                notes="Prior completed agent turns for this profile are replayed into provider input."
+                if history_characters
+                else "No prior completed agent turn for this profile was available to replay.",
             ),
             _section(
                 "current_agent_task",
@@ -106,7 +119,7 @@ def _build_agent_profile_analysis(
         output_characters=len(str(output_doc.get("text", ""))),
         enabled_harness_modules=enabled_modules,
         harness_decisions=harness_decisions,
-        provider_context_keys=["instructions", "prompt", "tools"] if tool_text else ["instructions", "prompt"],
+        provider_context_keys=provider_context_keys,
         subagent_count=len(subagents),
         subagent_usage_total=subagent_usage_total,
         caller_usage_total=_sum_usage([usage, subagent_usage_total]),
@@ -152,6 +165,82 @@ def _events_with_key(path: Path, key: str) -> list[dict[str, Any]]:
         for event in _read_jsonl(path)
         if isinstance(event.get(key), dict)
     ]
+
+
+def _skill_invocations(path: Path) -> list[dict[str, Any]]:
+    return [
+        event
+        for event in _read_jsonl(path)
+        if event.get("type") == "skill_invocation"
+    ]
+
+
+def _activated_skill_section(skill_invocations: list[dict[str, Any]]) -> ContextSection:
+    if not skill_invocations:
+        return ContextSection(
+            key="activated_skills",
+            label="Skill metadata",
+            status="not_configured",
+            characters=0,
+            estimated_tokens=0,
+            notes="No skill was selected for this agent turn.",
+        )
+    lines = []
+    token_total = 0
+    for event in skill_invocations:
+        skill_id = str(event.get("skill_id") or "").strip()
+        metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        source = str(metadata.get("source") or "selected")
+        token_usage = event.get("token_usage") if isinstance(event.get("token_usage"), dict) else {}
+        token_total += _as_int(token_usage.get("input_tokens") or token_usage.get("total_tokens"))
+        if skill_id:
+            lines.append(f"{skill_id} ({source})")
+    text = "\n".join(lines)
+    estimated_tokens = token_total or (max(1, (len(text) + 3) // 4) if text else 0)
+    return ContextSection(
+        key="activated_skills",
+        label="Skill metadata",
+        status="sent",
+        characters=max(len(text), estimated_tokens * 4),
+        estimated_tokens=estimated_tokens,
+        notes="Selected skill metadata and activated SKILL.md bodies were loaded into provider instructions.",
+    )
+
+
+def _tool_definition_section(input_doc: dict[str, Any], tool_text: str) -> ContextSection:
+    tool_definition_tokens = _as_int(input_doc.get("tool_definition_tokens"))
+    if tool_definition_tokens > 0:
+        return ContextSection(
+            key="tool_definitions",
+            label="Tool definitions",
+            status="sent",
+            characters=max(len(tool_text), tool_definition_tokens * 4),
+            estimated_tokens=tool_definition_tokens,
+            notes="Provider tool schemas were sent; tokens are estimated from serialized OpenAI tool JSON.",
+        )
+    return _section(
+        "tool_definitions",
+        "Tool definitions",
+        "sent" if tool_text else "not_configured",
+        tool_text,
+        "Tool definitions available to this agent profile.",
+    )
+
+
+def _conversation_messages_characters(value: Any) -> int:
+    if not isinstance(value, list):
+        return 0
+    total = 0
+    for message in value:
+        if not isinstance(message, dict):
+            continue
+        total += len(str(message.get("role", "")))
+        total += len(str(message.get("content", "")))
+    return total
+
+
+def _estimate_tokens(characters: int) -> int:
+    return max(1, (characters + 3) // 4) if characters else 0
 
 
 def _subagent_analyses(profile_dir: Path) -> dict[str, SubagentAnalysis]:

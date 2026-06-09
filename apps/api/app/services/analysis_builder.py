@@ -123,15 +123,7 @@ def _context_sections(
             instructions,
             "Final profile instructions sent to the provider.",
         ),
-        _section(
-            "tool_definitions",
-            "Tool definitions",
-            "sent" if tool_text else "not_configured",
-            tool_text,
-            "Tool definitions were sent to the provider for this profile."
-            if tool_text
-            else "Tool definitions were not available for this profile.",
-        ),
+        _tool_definition_section(input_doc, tool_text),
         _section(
             "activated_skills",
             "Activated skills",
@@ -351,6 +343,28 @@ def _section(key: str, label: str, status: str, text: str, notes: str) -> Contex
         characters=characters,
         estimated_tokens=_estimate_tokens(characters),
         notes=notes,
+    )
+
+
+def _tool_definition_section(input_doc: dict[str, Any], tool_text: str) -> ContextSection:
+    tool_definition_tokens = _as_int(input_doc.get("tool_definition_tokens"))
+    if tool_definition_tokens > 0:
+        return ContextSection(
+            key="tool_definitions",
+            label="Tool definitions",
+            status="sent",
+            characters=max(len(tool_text), tool_definition_tokens * 4),
+            estimated_tokens=tool_definition_tokens,
+            notes="Provider tool schemas were sent; tokens are estimated from serialized OpenAI tool JSON.",
+        )
+    return _section(
+        "tool_definitions",
+        "Tool definitions",
+        "sent" if tool_text else "not_configured",
+        tool_text,
+        "Tool definitions were sent to the provider for this profile."
+        if tool_text
+        else "Tool definitions were not available for this profile.",
     )
 
 

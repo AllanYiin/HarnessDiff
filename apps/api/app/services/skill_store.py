@@ -186,7 +186,7 @@ class SkillStore:
             "- Explicit invocation: if the user writes $skill-id, /skill-id, or clearly names a skill, use that skill.",
             "- Implicit invocation: if the request clearly matches a skill description, use that skill.",
             "- When a skill is activated, apply its SKILL.md body for this turn.",
-            "- Load bundled references, scripts, and assets only when needed; prefer running or patching scripts over retyping large code blocks.",
+            "- Bundled references, scripts, and assets are not loaded by default. Use skill.resources.list and skill.resources.read only when the activated SKILL.md workflow needs supporting files.",
         ]
         root_lines = []
         for root in _unique_roots(record.root for record in records):
@@ -306,6 +306,7 @@ class SkillStore:
                         _optional_skill_metadata_line("Required tools", activation.required_tools),
                         _optional_skill_metadata_line("Allowed tools", activation.allowed_tools),
                         "Resolve relative paths in this SKILL.md from its containing folder.",
+                        "If this skill references bundled references/, scripts/, or assets/, call skill.resources.list then skill.resources.read for the specific activated-skill file needed.",
                         "```markdown",
                         activation.content.replace("```", "`\u200b``"),
                         "```",
@@ -316,6 +317,7 @@ class SkillStore:
             [
                 "Auto-activated HarnessDiff skill details:",
                 "Apply these SKILL.md instructions for this turn because the user request matched the skill name or description.",
+                "Do not assume bundled references/scripts/assets are loaded; request individual resource files through skill.resources.* only when needed.",
                 *blocks,
             ]
         )

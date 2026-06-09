@@ -28,6 +28,7 @@ from app.services.run_orchestrator import (
     _profile_has_harness_context,
     _prompt_cache_key,
     _skill_selection_policy_for_profile,
+    _tool_definition_token_estimate,
 )
 from app.services.subagent_definitions import DEFAULT_SUBAGENTS
 from app.services.subagent_runtime import SUBAGENT_TOOL_NAME, SubagentToolRuntime
@@ -36,6 +37,7 @@ from app.services.skill_routing_review import (
     SKILL_ROUTING_REVIEW_TOOL_NAME,
     SkillRoutingReviewRuntime,
 )
+from app.services.skill_resource_runtime import SkillResourceRuntime
 
 
 logger = logging.getLogger(__name__)
@@ -53,9 +55,11 @@ class AgentRunOrchestrator(RunOrchestrator):
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         profile_errors: list[dict[str, Any]] = []
         run_dir = self.store.get_run_dir(run.project_id, run.id)
+        profiles_ready_to_stream = asyncio.Event()
 
         async def run_profile(profile) -> None:
             profile_started = time.perf_counter()
+            profile_prepared = False
             try:
                 await self._record_step(
                     queue,
@@ -110,6 +114,9 @@ class AgentRunOrchestrator(RunOrchestrator):
                     if auto_skill_context:
                         instructions = f"{instructions}\n\n{auto_skill_context}"
 
+                conversation_messages = self.store.read_profile_conversation_messages(
+                    run.project_id, profile.id, run.turn_index
+                )
                 has_full_tools = bool(profile.harness_modules.get("tool_policy", False))
                 globally_excluded_tools = (
                     self.skill_store.disabled_or_deleted_tool_names()
@@ -162,6 +169,14 @@ class AgentRunOrchestrator(RunOrchestrator):
                             and SKILL_ROUTING_REVIEW_TOOL_NAME not in globally_excluded_tools
                             else None
                         ),
+                        skill_resource_runtime=(
+                            SkillResourceRuntime(
+                                skill_store=self.skill_store,
+                                selected_skill_ids=selected_skill_ids,
+                            )
+                            if self.skill_store is not None and selected_skill_ids
+                            else None
+                        ),
                     )
                     if self.tool_runtime is not None
                     else None
@@ -171,8 +186,9 @@ class AgentRunOrchestrator(RunOrchestrator):
                     if active_tool_runtime is not None
                     else ()
                 )
+                tool_definition_tokens = _tool_definition_token_estimate(active_tool_runtime)
                 execution_policy = build_code_execution_policy(
-                    task_text=execution_policy_task_text(run.prompt, ()),
+                    task_text=execution_policy_task_text(run.prompt, conversation_messages),
                     harness_modules=profile.harness_modules,
                     tool_names=tool_names,
                     surface="agent",
@@ -200,11 +216,12 @@ class AgentRunOrchestrator(RunOrchestrator):
                     profile_prompt,
                     instructions,
                     profile.harness_modules,
-                    (),
+                    conversation_messages,
                     tool_names,
                     image_attachments,
                     prompt_cache_key,
                     execution_policy,
+                    tool_definition_tokens=tool_definition_tokens,
                 )
                 await self._record_step(
                     queue,
@@ -248,6 +265,10 @@ class AgentRunOrchestrator(RunOrchestrator):
                             "metadata": metadata,
                         }
                     )
+
+                await queue.put({"run_id": run.id, "profile_id": profile.id, "type": "profile_prepared"})
+                profile_prepared = True
+                await profiles_ready_to_stream.wait()
 
                 gate = self.control_plane.evaluate_before_provider(run, profile, instructions)
                 for sequence, decision in enumerate(gate.decisions):
@@ -299,7 +320,7 @@ class AgentRunOrchestrator(RunOrchestrator):
                     instructions=instructions,
                     prompt=profile_prompt,
                     image_attachments=image_attachments,
-                    conversation_messages=(),
+                    conversation_messages=conversation_messages,
                     prompt_cache_key=prompt_cache_key,
                     tools_enabled=active_tool_runtime is not None,
                     tool_context=active_tool_runtime,
@@ -352,13 +373,35 @@ class AgentRunOrchestrator(RunOrchestrator):
                 self.store.append_error_event(run.project_id, run.id, profile.id, error_payload)
                 await queue.put(error_payload)
             finally:
+                if not profile_prepared:
+                    await queue.put({"run_id": run.id, "profile_id": profile.id, "type": "profile_prepared"})
                 await queue.put({"run_id": run.id, "profile_id": profile.id, "type": "profile_done"})
 
         tasks = [asyncio.create_task(run_profile(profile)) for profile in run.profiles]
         remaining = len(tasks)
+        prepared = 0
+        early_analysis_sent = False
         try:
             while remaining:
                 payload = await queue.get()
+                if payload["type"] == "profile_prepared":
+                    prepared += 1
+                    if prepared == len(tasks):
+                        if not early_analysis_sent and not profile_errors:
+                            analysis = build_agent_run_analysis(
+                                run, self.store.get_run_dir(run.project_id, run.id)
+                            )
+                            self.store.write_agent_analysis(
+                                run.project_id, run.id, analysis.model_dump(mode="json")
+                            )
+                            early_analysis_sent = True
+                            yield {
+                                "run_id": run.id,
+                                "type": "analysis_ready",
+                                "analysis": analysis.model_dump(mode="json"),
+                            }
+                        profiles_ready_to_stream.set()
+                    continue
                 if payload["type"] == "profile_done":
                     remaining -= 1
                     continue

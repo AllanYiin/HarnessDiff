@@ -228,6 +228,70 @@ def test_agent_project_uses_agent_profiles_and_streams_steps(tmp_path) -> None:
     assert baseline_output["text"] == "NoHarness Agent: Inspect the repository"
 
 
+def test_agent_project_replays_profile_local_conversation_history(tmp_path) -> None:
+    provider = FakeAgentProvider()
+    client = TestClient(
+        create_app(data_dir=tmp_path, harnessdiff_home=tmp_path / ".harnessdiff", llm_provider=provider)
+    )
+    project_id = client.post(
+        "/api/projects", json={"name": "Agent", "surface_type": "agent"}
+    ).json()["id"]
+
+    first_run = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "照建議方向繼續",
+            "input_mode": "integrated",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+        },
+    ).json()
+    with client.stream("GET", f"/api/runs/{first_run['id']}/stream") as response:
+        assert response.status_code == 200
+        _sse_events("".join(response.iter_text()))
+
+    second_run = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "5",
+            "input_mode": "integrated",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+        },
+    ).json()
+    with client.stream("GET", f"/api/runs/{second_run['id']}/stream") as response:
+        assert response.status_code == 200
+        events = _sse_events("".join(response.iter_text()))
+
+    second_requests = {request.profile_id: request for request in provider.requests[-2:]}
+    assert second_requests["baseline_agent"].conversation_messages == (
+        {"role": "user", "content": "照建議方向繼續"},
+        {"role": "assistant", "content": "NoHarness Agent: 照建議方向繼續"},
+    )
+    assert second_requests["harness_agent"].conversation_messages == (
+        {"role": "user", "content": "照建議方向繼續"},
+        {"role": "assistant", "content": "Harness Agent: 照建議方向繼續"},
+    )
+
+    run_dir = tmp_path / "projects" / project_id / "runs" / second_run["id"]
+    input_doc = json.loads(
+        (run_dir / "harness_agent" / "input.json").read_text(encoding="utf-8")
+    )
+    assert input_doc["conversation_messages"] == [
+        {"role": "user", "content": "照建議方向繼續"},
+        {"role": "assistant", "content": "Harness Agent: 照建議方向繼續"},
+    ]
+
+    final_analysis = [event for event in events if event["type"] == "analysis_ready"][-1]["analysis"]
+    history = next(
+        section
+        for section in final_analysis["profiles"]["harness_agent"]["context_sections"]
+        if section["key"] == "stored_conversation_history"
+    )
+    assert history["status"] == "sent"
+    assert history["characters"] > 0
+
+
 def test_harness_agent_reads_harnessdiff_agents_md(tmp_path) -> None:
     provider = FakeAgentProvider()
     home = tmp_path / ".harnessdiff"
@@ -288,6 +352,13 @@ def test_agent_explicit_skill_invocation_loads_skill_context(tmp_path) -> None:
         events = _sse_events("".join(response.iter_text()))
 
     assert any(event["type"] == "skill_invocation" for event in events)
+    final_analysis = [event for event in events if event["type"] == "analysis_ready"][-1]["analysis"]
+    harness_sections = final_analysis["profiles"]["harness_agent"]["context_sections"]
+    activated_skills = next(
+        section for section in harness_sections if section["key"] == "activated_skills"
+    )
+    assert activated_skills["status"] == "sent"
+    assert activated_skills["estimated_tokens"] > 0
     assert all(
         "Apply the demo skill sentinel workflow." in request.instructions
         for request in provider.requests
@@ -440,14 +511,36 @@ def test_agent_analysis_artifact_and_transcript_steps_are_traceable(tmp_path) ->
         events = _sse_events("".join(response.iter_text()))
 
     analysis_events = [event for event in events if event["type"] == "analysis_ready"]
-    assert len(analysis_events) == 1
-    analysis = analysis_events[0]["analysis"]
+    assert len(analysis_events) == 2
+    early_analysis = analysis_events[0]["analysis"]
+    early_harness = early_analysis["profiles"]["harness_agent"]
+    assert early_harness["current_turn_usage"]["source"] == "missing"
+    assert sum(
+        section["estimated_tokens"]
+        for section in early_harness["context_sections"]
+        if section["status"] in {"sent", "recorded"}
+    ) > 0
+    early_tool_definitions = next(
+        section
+        for section in early_harness["context_sections"]
+        if section["key"] == "tool_definitions"
+    )
+
+    analysis = analysis_events[-1]["analysis"]
     assert analysis["raw_sources"]["analysis_basis"] == "local_agent_artifacts"
     assert analysis["raw_sources"]["agent_metrics"]["harness_agent"]["tool_call_count"] == 1
     assert analysis["raw_sources"]["agent_metrics"]["harness_agent"]["subagent_count"] == 1
     assert analysis["profiles"]["harness_agent"]["subagent_count"] == 0
+    assert analysis["profiles"]["harness_agent"]["current_turn_usage"]["source"] == "provider_reported"
 
     run_dir = tmp_path / "projects" / project_id / "runs" / run["id"]
+    harness_input = json.loads(
+        (run_dir / "harness_agent" / "input.json").read_text(encoding="utf-8")
+    )
+    assert harness_input["tool_definition_tokens"] > len(
+        ", ".join(harness_input["tool_names"])
+    ) // 4
+    assert early_tool_definitions["estimated_tokens"] == harness_input["tool_definition_tokens"]
     analysis_path = run_dir / "analysis" / "agent-analysis.json"
     assert analysis_path.exists()
     stored_analysis = json.loads(analysis_path.read_text(encoding="utf-8"))

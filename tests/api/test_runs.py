@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from collections.abc import AsyncIterator
@@ -230,6 +231,8 @@ def test_run_stream_writes_profile_outputs_usage_and_harnessable_trace(tmp_path)
     assert "harness.subagent.run" in harness_input["tool_names"]
     assert "multi_tool_use.parallel" in harness_input["tool_names"]
     assert "skill_routing_review" in harness_input["tool_names"]
+    assert baseline_input["tool_definition_tokens"] > len(", ".join(baseline_input["tool_names"])) // 4
+    assert harness_input["tool_definition_tokens"] > len(", ".join(harness_input["tool_names"])) // 4
     assert harness_input["harness_modules"]["consequence_gate"] is True
     assert baseline_input["execution_policy"] == {}
     assert harness_input["execution_policy"] == {}
@@ -252,6 +255,8 @@ def test_run_stream_writes_profile_outputs_usage_and_harnessable_trace(tmp_path)
     )
     assert baseline_tools["status"] == "sent"
     assert harness_tools["status"] == "sent"
+    assert baseline_tools["estimated_tokens"] == baseline_input["tool_definition_tokens"]
+    assert harness_tools["estimated_tokens"] == harness_input["tool_definition_tokens"]
     assert analysis_doc["profiles"]["harness"]["harness_decisions"]
     assert analysis_doc["comparison"]["total_token_delta"] == 0
 
@@ -833,6 +838,104 @@ def test_explicit_slash_skill_invocation_loads_full_skill_context(tmp_path) -> N
         and event["metadata"]["source"] == "explicit"
         for event in events
     )
+
+
+def test_selected_skill_exposes_resources_on_demand_only(tmp_path) -> None:
+    home = tmp_path / "home"
+    skill_dir = home / "skills" / "invoice-helper"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "references").mkdir()
+    (skill_dir / "scripts").mkdir()
+    (skill_dir / "private").mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: invoice-helper\n"
+        "description: Use when the user asks to summarize invoices or extract invoice totals.\n"
+        "---\n"
+        "# Invoice workflow\n"
+        "When totals are unclear, consult `references/totals.md`.\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "references" / "totals.md").write_text(
+        "Invoice total rules sentinel.", encoding="utf-8"
+    )
+    (skill_dir / "scripts" / "parse_invoice.py").write_text(
+        "print('parse invoice sentinel')\n", encoding="utf-8"
+    )
+    (skill_dir / "private" / "secret.txt").write_text("do not expose", encoding="utf-8")
+    other_skill_dir = home / "skills" / "poetry-helper"
+    other_skill_dir.mkdir(parents=True)
+    (other_skill_dir / "references").mkdir()
+    (other_skill_dir / "SKILL.md").write_text(
+        "---\nname: poetry-helper\ndescription: Use when translating poetry.\n---\n",
+        encoding="utf-8",
+    )
+    (other_skill_dir / "references" / "meter.md").write_text("poetry sentinel", encoding="utf-8")
+
+    provider = SkillSelectingProvider(("invoice-helper",))
+    client = TestClient(
+        create_app(data_dir=tmp_path / "data", harnessdiff_home=home, llm_provider=provider)
+    )
+    project_id = client.post("/api/projects", json={"name": "Skill resources"}).json()["id"]
+    run = client.post(
+        f"/api/projects/{project_id}/runs",
+        json={
+            "prompt": "Please summarize invoice totals.",
+            "input_mode": "independent",
+            "model": "fake-model",
+            "reasoning_effort": "medium",
+            "profiles": [{"id": "controlled", "label": "Controlled", "harness_modules": {}}],
+        },
+    ).json()
+    with client.stream("GET", f"/api/runs/{run['id']}/stream") as response:
+        assert response.status_code == 200
+        _sse_events("".join(response.iter_text()))
+
+    request = provider.requests[-1]
+    tool_names = request.tool_context.list_tool_names()
+    assert "skill.resources.list" in tool_names
+    assert "skill.resources.read" in tool_names
+    openai_tool_names = {tool["name"] for tool in request.tool_context.list_openai_tools()}
+    assert "skill_resources_list" in openai_tool_names
+    assert "skill_resources_read" in openai_tool_names
+    assert "skill.resources.read" in request.instructions
+    assert "Invoice total rules sentinel." not in request.instructions
+    assert "print('parse invoice sentinel')" not in request.instructions
+
+    listed = asyncio.run(request.tool_context.invoke_openai_tool("skill_resources_list", {}))
+    assert listed.ok is True
+    resources = listed.result["skills"][0]["resources"]
+    resource_paths = {resource["relative_path"] for resource in resources}
+    assert "references/totals.md" in resource_paths
+    assert "scripts/parse_invoice.py" in resource_paths
+    assert "private/secret.txt" not in resource_paths
+
+    read = asyncio.run(
+        request.tool_context.invoke_openai_tool(
+            "skill_resources_read",
+            {"skill_id": "invoice-helper", "relative_path": "references/totals.md"},
+        )
+    )
+    assert read.ok is True
+    assert read.result["content"] == "Invoice total rules sentinel."
+
+    unselected = asyncio.run(
+        request.tool_context.invoke_openai_tool(
+            "skill_resources_read",
+            {"skill_id": "poetry-helper", "relative_path": "references/meter.md"},
+        )
+    )
+    assert unselected.ok is False
+    assert unselected.error["type"] == "SkillResourceError"
+
+    escaped = asyncio.run(
+        request.tool_context.invoke_openai_tool(
+            "skill_resources_read",
+            {"skill_id": "invoice-helper", "relative_path": "../SKILL.md"},
+        )
+    )
+    assert escaped.ok is False
+    assert escaped.error["type"] == "SkillResourceError"
 
 
 def test_deterministic_skill_match_is_used_when_llm_selector_returns_empty(tmp_path) -> None:

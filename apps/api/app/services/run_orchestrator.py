@@ -38,6 +38,7 @@ from app.services.skill_routing_review import (
     SKILL_ROUTING_REVIEW_TOOL_NAME,
     SkillRoutingReviewRuntime,
 )
+from app.services.skill_resource_runtime import SkillResourceRuntime
 from app.services.subagent_definitions import DEFAULT_SUBAGENTS
 from app.services.subagent_runtime import SUBAGENT_TOOL_NAME, SubagentToolRuntime
 from app.services.tool_runtime import WRITE_TOOL_NAMES, _estimate_text_tokens
@@ -171,6 +172,14 @@ class RunOrchestrator:
                             and SKILL_ROUTING_REVIEW_TOOL_NAME not in globally_excluded_tools
                             else None
                         ),
+                        skill_resource_runtime=(
+                            SkillResourceRuntime(
+                                skill_store=self.skill_store,
+                                selected_skill_ids=selected_skill_ids,
+                            )
+                            if self.skill_store is not None and selected_skill_ids
+                            else None
+                        ),
                     )
                     if self.tool_runtime is not None
                     else None
@@ -180,6 +189,7 @@ class RunOrchestrator:
                     if active_tool_runtime is not None
                     else ()
                 )
+                tool_definition_tokens = _tool_definition_token_estimate(active_tool_runtime)
                 execution_policy = build_code_execution_policy(
                     task_text=execution_policy_task_text(run.prompt, conversation_messages),
                     harness_modules=profile.harness_modules,
@@ -214,6 +224,7 @@ class RunOrchestrator:
                     image_attachments,
                     prompt_cache_key,
                     execution_policy,
+                    tool_definition_tokens=tool_definition_tokens,
                 )
                 decision_sequence = 0
                 for sequence, decision in enumerate(skill_context_gate.decisions):
@@ -499,6 +510,21 @@ def _event_to_payload(run_id: str, event: ProviderEvent) -> dict[str, Any]:
 
 def _prompt_cache_key(project_id: str, profile_id: str) -> str:
     return f"harnessdiff:project:{project_id}:profile:{profile_id}"
+
+
+def _tool_definition_token_estimate(tool_context: Any | None) -> int:
+    if tool_context is None:
+        return 0
+    try:
+        tools = tool_context.list_openai_tools()
+    except Exception:
+        logger.exception("Failed to estimate provider tool definition tokens.")
+        return 0
+    try:
+        text = json.dumps(tools, ensure_ascii=False, sort_keys=True, default=str)
+    except TypeError:
+        text = repr(tools)
+    return _estimate_text_tokens(text)
 
 
 def _profile_has_harness_context(profile) -> bool:
